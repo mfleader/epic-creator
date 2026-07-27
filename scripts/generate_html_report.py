@@ -457,6 +457,59 @@ def build_report(strat_ids, start_time):
     all_issues = []
     for s in all_stats:
         all_issues.extend(s.get("issues") or [])
+
+    # Per-criterion violation stats — human-readable rendering (C5).
+    # A strategy is counted as reviewed when its review produced a pass, fail,
+    # or error result; strategies with no review file have all three False.
+    reviewed_count = sum(
+        1 for s in all_stats if s["passed"] or s["failed"] or s["error"]
+    )
+    criterion_violations_map = {}
+    criterion_affected_map = {}
+    for s in all_stats:
+        seen_criteria: set = set()
+        for iss in (s.get("issues") or []):
+            crit = iss.get("criterion", "") if isinstance(iss, dict) else ""
+            if crit:
+                criterion_violations_map[crit] = (
+                    criterion_violations_map.get(crit, 0) + 1
+                )
+                seen_criteria.add(crit)
+        for crit in seen_criteria:
+            criterion_affected_map[crit] = criterion_affected_map.get(crit, 0) + 1
+
+    if criterion_violations_map:
+        crit_rows = ""
+        for crit in sorted(criterion_violations_map):
+            total_v = criterion_violations_map[crit]
+            affected = criterion_affected_map.get(crit, 0)
+            pr = (1.0 - affected / reviewed_count) if reviewed_count > 0 else 0.0
+            pct = f"{pr * 100:.0f}%"
+            bar_color = ("var(--high)" if pr >= 0.7
+                         else ("var(--medium)" if pr >= 0.4 else "var(--low)"))
+            crit_rows += (
+                f'<tr>'
+                f'<td style="font-family:monospace;font-size:0.85rem;">'
+                f'{_html_escape(crit)}</td>'
+                f'<td style="text-align:center;">{total_v}</td>'
+                f'<td style="text-align:center;color:{bar_color};font-weight:600;">'
+                f'{pct}</td>'
+                f'</tr>'
+            )
+        criterion_card_html = (
+            f'<div class="card" style="margin-bottom:2rem;">'
+            f'<h3 style="font-size:1rem;margin-bottom:0.75rem;">'
+            f'Per-Criterion Violation Frequency</h3>'
+            f'<table class="summary-table"><thead><tr>'
+            f'<th>Criterion</th>'
+            f'<th style="text-align:center;">Violations</th>'
+            f'<th style="text-align:center;">Pass Rate</th>'
+            f'</tr></thead>'
+            f'<tbody>{crit_rows}</tbody>'
+            f'</table></div>'
+        )
+    else:
+        criterion_card_html = ""
     critical_count = sum(1 for i in all_issues if i.get("severity") == "critical")
     major_count = sum(1 for i in all_issues if i.get("severity") == "major")
     minor_count = sum(1 for i in all_issues if i.get("severity") == "minor")
@@ -583,6 +636,7 @@ def build_report(strat_ids, start_time):
   {f'<div class="table-fade"></div><button class="table-see-all" onclick="toggleTable(this)">See all {total_strats} strategies</button>' if total_strats > 20 else ''}
 </div>
 
+{criterion_card_html}
 {"".join(all_sections)}
 
 <div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:2rem 0 1rem;">
