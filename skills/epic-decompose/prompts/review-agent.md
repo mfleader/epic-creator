@@ -137,12 +137,14 @@ Recommendation: [accept/revise]
 <findings>
 ```
 
-2. Set frontmatter via script. The `issues` list uses JSON format — each issue has `severity` (critical/major/minor), `criterion` (which of the 7), and `description` (specific, actionable):
+2. Set frontmatter via script. The `issues` list uses JSON format — each issue has `severity` (critical/major/minor), `criterion` (which of the 7), `description` (specific, actionable), and `strategy_gap` (boolean, default false).
+
+**strategy_gap**: Set to `true` when resolving the finding requires information absent from the strategy document — for example, the strategy omits a constraint, prerequisite, or scope boundary that would change the decomposition. Set to `false` (or omit) when the decomposition can be improved to address the finding without additional input from the strategy author. A `strategy_gap: true` finding counts toward the review score exactly as any other finding of the same severity. It appears in the run report's human-review section with `kind: strategy-gap` and is skipped by the revise agent.
 
 ```bash
 python3 scripts/frontmatter.py set artifacts/epic-reviews/{ID}-decomp-review.md \
     strat_id="{ID}" score=13 pass=true recommendation=accept \
-    'issues=[{"severity":"minor","criterion":"DAG Coherence","description":"E003-E004 edge not justified by shared artifact"}]'
+    'issues=[{"severity":"minor","criterion":"DAG Coherence","description":"E003-E004 edge not justified by shared artifact","strategy_gap":false}]'
 ```
 
 For a passing review with no issues: `issues=[]`
