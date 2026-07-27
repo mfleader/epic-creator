@@ -99,6 +99,16 @@ def severity_badge(sev):
     return f'<span class="badge {cls}">{_html_escape(sev)}</span>'
 
 
+def kind_badge(kind):
+    cls = {
+        "failed-review": "badge-kind-failed-review",
+        "abstained": "badge-kind-abstained",
+        "unresolved-signal": "badge-kind-unresolved-signal",
+        "strategy-gap": "badge-kind-strategy-gap",
+    }.get(kind, "badge-kind-unknown")
+    return f'<span class="badge {cls}">{_html_escape(kind)}</span>'
+
+
 def render_signals(signals, names=SIGNAL_NAMES):
     html = '<div class="signals-grid">'
     for name in names:
@@ -244,6 +254,22 @@ def render_strategy_section(strat_id):
         "issues": issues,
     }
 
+    # Emit C1 human-review entries for strategies that failed review.
+    # Future issues append other kinds (abstained, unresolved-signal,
+    # strategy-gap) by extending this list; render_human_review_section
+    # requires no changes when new kinds are added.
+    human_review_entries = []
+    if stats["failed"]:
+        for iss in issues:
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "failed-review",
+                "severity": iss.get("severity", ""),
+                "criterion": iss.get("criterion", ""),
+                "description": f"[{score}/14] {iss.get('description', '')}",
+            })
+    stats["human_review_entries"] = human_review_entries
+
     triage_label = ""
     if triage:
         triage_label = f' <span class="badge badge-triage">{_html_escape(triage)}</span>'
@@ -372,6 +398,11 @@ CSS = '''
   .badge-minor { background: #fff3cd; color: #856404; }
   .badge-major { background: #f8d7da; color: #842029; }
   .badge-critical { background: #842029; color: white; }
+  .badge-kind-failed-review { background: #842029; color: white; }
+  .badge-kind-abstained { background: #664d03; color: white; }
+  .badge-kind-unresolved-signal { background: #fd7e14; color: white; }
+  .badge-kind-strategy-gap { background: #6c757d; color: white; }
+  .badge-kind-unknown { background: #adb5bd; color: #212529; }
   .epic-header { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .epic-id { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 0.85rem; color: var(--accent); font-weight: 600; }
   .epic-title { font-size: 1.1rem; font-weight: 600; }
@@ -432,6 +463,48 @@ CSS = '''
 '''
 
 
+def render_human_review_section(entries):
+    """Render the C1 Requires Human Review section.
+
+    Generic renderer over a collected entry list.  Each entry must conform
+    to the C1 schema: {strategy_id, kind, severity, criterion, description}.
+    The renderer iterates uniformly over all entries regardless of kind, so
+    adding a new kind (abstained, unresolved-signal, strategy-gap, ...) in
+    a future issue requires zero changes here.
+    """
+    if not entries:
+        return ""
+    rows = ""
+    for entry in entries:
+        sid = _html_escape(entry.get("strategy_id", ""))
+        rows += (
+            f'<tr>'
+            f'<td><a href="#{sid}" class="strat-link">{sid}</a></td>'
+            f'<td>{kind_badge(entry.get("kind", ""))}</td>'
+            f'<td>{severity_badge(entry.get("severity", ""))}</td>'
+            f'<td style="font-size:0.85rem;">'
+            f'{_html_escape(entry.get("criterion", ""))}</td>'
+            f'<td style="font-size:0.85rem;">'
+            f'{_html_escape(entry.get("description", ""))}</td>'
+            f'</tr>'
+        )
+    return (
+        f'<h2>Requires Human Review</h2>'
+        f'<div class="card" style="margin-bottom:2rem;">'
+        f'<table class="summary-table">'
+        f'<thead><tr>'
+        f'<th>Strategy</th>'
+        f'<th>Kind</th>'
+        f'<th>Severity</th>'
+        f'<th>Criterion</th>'
+        f'<th>Description</th>'
+        f'</tr></thead>'
+        f'<tbody>{rows}</tbody>'
+        f'</table>'
+        f'</div>'
+    )
+
+
 def build_report(strat_ids, start_time):
     """Build the full HTML report. Returns (html_string, out_filename)."""
     all_sections = []
@@ -457,6 +530,12 @@ def build_report(strat_ids, start_time):
     all_issues = []
     for s in all_stats:
         all_issues.extend(s.get("issues") or [])
+
+    # Aggregate C1 human-review entries from all strategies
+    all_human_review_entries = []
+    for s in all_stats:
+        all_human_review_entries.extend(s.get("human_review_entries") or [])
+    human_review_html = render_human_review_section(all_human_review_entries)
 
     # Per-criterion violation stats — human-readable rendering (C5).
     # A strategy is counted as reviewed when its review produced a pass, fail,
@@ -636,6 +715,7 @@ def build_report(strat_ids, start_time):
   {f'<div class="table-fade"></div><button class="table-see-all" onclick="toggleTable(this)">See all {total_strats} strategies</button>' if total_strats > 20 else ''}
 </div>
 
+{human_review_html}
 {criterion_card_html}
 {"".join(all_sections)}
 
