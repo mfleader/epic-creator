@@ -160,14 +160,15 @@ def _copy_ids(src, dst):
     shutil.copy2(src, dst)
 
 
-def _reset_revised_flag(decomp_path):
+def _reset_revised_flag(decomp_path, read_frontmatter=None):
     """Remove ``revised`` key from decomposition frontmatter.
 
     The revise_decomp completion poller treats *any* non-None value
     (including False) as "completed".  Removing the key forces it back to
     "pending" so the revise agent is actually launched.
     """
-    from artifact_utils import read_frontmatter
+    if read_frontmatter is None:
+        from artifact_utils import read_frontmatter
     data, body = read_frontmatter(decomp_path)
     if data and "revised" in data:
         del data["revised"]
@@ -206,11 +207,14 @@ def _compute_ai_scores(ids_file):
 MAIN_SEQUENCE = ["FETCH", "DECOMPOSE", "REVIEW_DECOMP"]
 
 
-def advance(state, dry_run=False):
+def advance(state, dry_run=False, read_frontmatter=None):
     """Compute and apply the next phase transition.
 
     Returns (next_phase, summary_line).
     """
+    _rfm = read_frontmatter
+    if _rfm is None:
+        from artifact_utils import read_frontmatter as _rfm
     phase = state["phase"]
 
     # --- BATCH_START: reset counters, populate active IDs ---
@@ -238,7 +242,7 @@ def advance(state, dry_run=False):
             for strat_id in _read_ids("tmp/pipeline-active-ids.txt"):
                 decomp = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
                 if os.path.exists(decomp):
-                    _reset_revised_flag(decomp)
+                    _reset_revised_flag(decomp, read_frontmatter=_rfm)
         return "REVISE_DECOMP", "REVIEW_DECOMP → REVISE_DECOMP: first revision (unconditional)"
 
     # --- REVISE_DECOMP → RE_REVIEW_CHECK ---
@@ -249,7 +253,6 @@ def advance(state, dry_run=False):
 
     # --- RE_REVIEW_CHECK: did revision change anything? ---
     if phase == "RE_REVIEW_CHECK":
-        from artifact_utils import read_frontmatter
         cycle = state.get("revise_cycle", 0)
         if cycle == 0:
             check_ids = _read_ids("tmp/pipeline-active-ids.txt")
@@ -260,7 +263,7 @@ def advance(state, dry_run=False):
             decomp_path = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
             if os.path.exists(decomp_path):
                 try:
-                    data, _ = read_frontmatter(decomp_path)
+                    data, _ = _rfm(decomp_path)
                     if data and data.get("revised"):
                         revised_ids.append(strat_id)
                 except Exception:
@@ -283,14 +286,13 @@ def advance(state, dry_run=False):
 
     # --- REVISE_CHECK: only revise again if review fails, with cycle cap ---
     if phase == "REVISE_CHECK":
-        from artifact_utils import read_frontmatter
         revise_ids = _read_ids("tmp/pipeline-revise-ids.txt")
         failing_ids = []
         for strat_id in revise_ids:
             review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
             if os.path.exists(review_path):
                 try:
-                    data, _ = read_frontmatter(review_path)
+                    data, _ = _rfm(review_path)
                     if data and not data.get("pass", True):
                         failing_ids.append(strat_id)
                 except Exception:
@@ -304,7 +306,7 @@ def advance(state, dry_run=False):
                 for strat_id in failing_ids:
                     decomp_path = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
                     if os.path.exists(decomp_path):
-                        _reset_revised_flag(decomp_path)
+                        _reset_revised_flag(decomp_path, read_frontmatter=_rfm)
             return ("RE_REVISE",
                     f"REVISE_CHECK → RE_REVISE:"
                     f" failing={len(failing_ids)} cycle={cycle + 1}/2")
@@ -336,8 +338,7 @@ def advance(state, dry_run=False):
                 review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
                 if os.path.exists(review_path):
                     try:
-                        from artifact_utils import read_frontmatter
-                        data, _ = read_frontmatter(review_path)
+                        data, _ = _rfm(review_path)
                         if data and data.get("error"):
                             error_ids.append(strat_id)
                     except Exception:
