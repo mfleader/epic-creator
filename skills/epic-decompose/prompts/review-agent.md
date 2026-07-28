@@ -149,4 +149,43 @@ python3 scripts/frontmatter.py set artifacts/epic-reviews/{ID}-decomp-review.md 
 
 For a passing review with no issues: `issues=[]`
 
-Do not return a summary. Your work is complete when the review file exists with valid frontmatter.
+## Step 5: Carryover Reconciliation (if prior review exists)
+
+This step fires only after independent scoring (Steps 1–4) is complete. Check for the prior review file now — do not read it before this point.
+
+Check: `artifacts/epic-reviews/{ID}-decomp-review.prev.md`
+
+If the file does not exist, your work is complete.
+
+If the file exists, read it and reconcile each entry in its `issues` list:
+
+- **resolved**: the decomposition was corrected to address this finding
+- **unresolved**: the finding still applies (carry forward the original severity and criterion)
+- **disputed**: you do not agree this is a genuine finding — provide one line of reasoning
+
+### Carryover rules
+
+1. The 7-criterion score (0–14) computed in Steps 2–3 is not changed.
+2. For every prior finding marked `unresolved` with severity `critical` or `major`: add it to the current review's `issues` list and set `pass=false` in the frontmatter. Re-run the frontmatter set command with the full updated `issues` array and the updated `pass` value:
+
+```bash
+python3 scripts/frontmatter.py set artifacts/epic-reviews/{ID}-decomp-review.md \
+    pass=false \
+    'issues=[<full updated issues array including carried-over findings>]'
+```
+
+3. Minor unresolved prior findings are added to `issues` for visibility but do not force `pass=false` on their own.
+
+### Append the carryover section to the review file
+
+```markdown
+## Carryover Reconciliation
+
+| Prior finding | Severity | Verdict | Reasoning |
+|---|---|---|---|
+| [description] | critical/major/minor | resolved | — |
+| [description] | critical/major/minor | unresolved | Carried to current issues list |
+| [description] | critical/major/minor | disputed | [one line of reasoning] |
+```
+
+Do not return a summary. Your work is complete when the review file exists with valid frontmatter and the carryover section (if applicable) has been appended.
