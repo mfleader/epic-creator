@@ -52,9 +52,11 @@ _BlockDumper.add_representer(str, _str_representer)
 # ---------- Phase enum ----------
 
 PHASES = [
-    "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP",
-    "REVISE_DECOMP",
+    "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE",
+    "SCORE_SIGNALS_DECOMP", "REVIEW_DECOMP",
+    "REVISE_DECOMP", "SCORE_SIGNALS_REVISE",
     "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK", "RE_REVISE",
+    "SCORE_SIGNALS_REREVISE",
     "BATCH_DONE", "ERROR_COLLECT",
     "REPORT", "DONE",
 ]
@@ -86,6 +88,46 @@ PHASE_CONFIG = {
         "ids_file": "tmp/pipeline-active-ids.txt",
         "poll_phase": "decompose",
         "vars": {"ID": "{ID}"},
+    },
+    # SCORE_SIGNALS phases run the signal-scorer after each decompose/revise step.
+    # k, escalation_k, tier_thresholds, sample_model, and citation_demotion are
+    # read from this config and injected as agent vars — see cmd_next_action.
+    # Never hardcode these values in the prompt; the prompt reads {K} etc. as vars.
+    "SCORE_SIGNALS_DECOMP": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
+    },
+    "SCORE_SIGNALS_REVISE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
+    },
+    "SCORE_SIGNALS_REREVISE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-revise-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
     },
     "REVIEW_DECOMP": {
         "type": "agent",
@@ -214,7 +256,7 @@ def _compute_ai_scores(ids_file):
 
 # ---------- Transition logic ----------
 
-MAIN_SEQUENCE = ["FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP"]
+MAIN_SEQUENCE = ["FETCH", "TRIAGE", "DECOMPOSE", "SCORE_SIGNALS_DECOMP", "REVIEW_DECOMP"]
 
 
 def advance(state, dry_run=False, read_frontmatter=None):
@@ -237,10 +279,12 @@ def advance(state, dry_run=False, read_frontmatter=None):
         return "FETCH", f"BATCH_START → FETCH: batch={batch}"
 
     # --- Linear main sequence ---
+    # FETCH → TRIAGE → DECOMPOSE → SCORE_SIGNALS_DECOMP → REVIEW_DECOMP
+    # _compute_ai_scores fires at SCORE_SIGNALS_DECOMP (not DECOMPOSE).
     if phase in MAIN_SEQUENCE[:-1]:
         nxt = MAIN_SEQUENCE[MAIN_SEQUENCE.index(phase) + 1]
         extra = ""
-        if phase == "DECOMPOSE" and not dry_run:
+        if phase == "SCORE_SIGNALS_DECOMP" and not dry_run:
             _compute_ai_scores("tmp/pipeline-active-ids.txt")
         if phase == "TRIAGE" and not dry_run:
             active_ids = _read_ids("tmp/pipeline-active-ids.txt")
@@ -283,11 +327,16 @@ def advance(state, dry_run=False, read_frontmatter=None):
                     _reset_revised_flag(decomp, read_frontmatter=_rfm)
         return "REVISE_DECOMP", "REVIEW_DECOMP → REVISE_DECOMP: first revision (unconditional)"
 
-    # --- REVISE_DECOMP → RE_REVIEW_CHECK ---
+    # --- REVISE_DECOMP → SCORE_SIGNALS_REVISE ---
+    # _compute_ai_scores fires at SCORE_SIGNALS_REVISE (not REVISE_DECOMP).
     if phase == "REVISE_DECOMP":
+        return "SCORE_SIGNALS_REVISE", "REVISE_DECOMP → SCORE_SIGNALS_REVISE"
+
+    # --- SCORE_SIGNALS_REVISE → RE_REVIEW_CHECK ---
+    if phase == "SCORE_SIGNALS_REVISE":
         if not dry_run:
             _compute_ai_scores("tmp/pipeline-active-ids.txt")
-        return "RE_REVIEW_CHECK", "REVISE_DECOMP → RE_REVIEW_CHECK"
+        return "RE_REVIEW_CHECK", "SCORE_SIGNALS_REVISE → RE_REVIEW_CHECK"
 
     # --- RE_REVIEW_CHECK: did revision change anything? ---
     if phase == "RE_REVIEW_CHECK":
@@ -350,11 +399,16 @@ def advance(state, dry_run=False, read_frontmatter=None):
                     f" failing={len(failing_ids)} cycle={cycle + 1}/2")
         return "BATCH_DONE", "REVISE_CHECK → BATCH_DONE: review passed or cycle cap reached"
 
-    # --- RE_REVISE → RE_REVIEW_CHECK (loop back) ---
+    # --- RE_REVISE → SCORE_SIGNALS_REREVISE (loop back) ---
+    # _compute_ai_scores fires at SCORE_SIGNALS_REREVISE (not RE_REVISE).
     if phase == "RE_REVISE":
+        return "SCORE_SIGNALS_REREVISE", "RE_REVISE → SCORE_SIGNALS_REREVISE"
+
+    # --- SCORE_SIGNALS_REREVISE → RE_REVIEW_CHECK ---
+    if phase == "SCORE_SIGNALS_REREVISE":
         if not dry_run:
             _compute_ai_scores("tmp/pipeline-revise-ids.txt")
-        return "RE_REVIEW_CHECK", "RE_REVISE → RE_REVIEW_CHECK"
+        return "RE_REVIEW_CHECK", "SCORE_SIGNALS_REREVISE → RE_REVIEW_CHECK"
 
     # --- BATCH_DONE decision ---
     if phase == "BATCH_DONE":
@@ -618,6 +672,26 @@ def cmd_next_action(args):
                 for k, v in config.get("vars", {}).items():
                     var_lines.append(
                         f"{k}={v.replace('{ID}', strat_id)}")
+                # Inject PHASE_CONFIG scalar parameters as agent env vars.
+                # This ensures prompts read config values from vars (not
+                # hardcoded), satisfying the CONFIG MUST BE WIRED requirement.
+                _SCALAR_VARS = {
+                    "k": "K",
+                    "escalation_k": "ESCALATION_K",
+                    "sample_model": "SAMPLE_MODEL",
+                    "citation_demotion": "CITATION_DEMOTION",
+                }
+                for cfg_key, var_name in _SCALAR_VARS.items():
+                    if cfg_key in config:
+                        val = config[cfg_key]
+                        var_lines.append(
+                            f"{var_name}={val if val is not None else 'none'}")
+                if "tier_thresholds" in config:
+                    tt = config["tier_thresholds"]
+                    var_lines.append(
+                        f"TIER_HIGH_FRACTION={tt.get('high', 1.0)}")
+                    var_lines.append(
+                        f"TIER_MEDIUM_FRACTION={tt.get('medium', 0.5)}")
                 entry["vars"] = "\n".join(var_lines) + "\n"
                 agents.append(entry)
 

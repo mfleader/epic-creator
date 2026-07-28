@@ -152,7 +152,9 @@ For each epic, determine:
 
 ### AI Implementability Signals
 
-Score signals so the pipeline can compute an AI-implementability classification deterministically. **Do not compute the total score or classification yourself.** Use the signal set that matches the epic `type` — Implementation and Investigation epics measure different things.
+Evaluate signals so the SCORE_SIGNALS phase can score them reproducibly. **Do not write signal values to epic frontmatter here.** The signal scorer (a separate pipeline phase) runs each signal independently k times and writes the final values and consistency tiers. Your job here is to record your rationale so the scorer has an artifact to cite.
+
+**Do not compute the total score or classification yourself.** Use the signal set that matches the epic `type` — Implementation and Investigation epics measure different things.
 
 #### Implementation epics → `ai_signals` (9 signals)
 
@@ -184,7 +186,9 @@ Evaluate each as +1 (favorable), 0 (neutral/N/A), or -1 (unfavorable). Write the
 
 The pipeline routes: **High** → assign to the investigation skill; **Medium** → hybrid (skill resolves the desk/local parts and hands a spec to a human for the rest); **Low** → assign to a person.
 
-Write the signal rationale to a separate file `artifacts/epic-tasks/{ID}-ENNN-ai-signals.md` (one per epic), for whichever signal set you used. Format as a markdown table with Signal, Value, and Rationale columns. Do not write the signals table into the epic body.
+Write the signal rationale to a separate file `artifacts/epic-tasks/{ID}-ENNN-ai-signals.md` (one per epic), for whichever signal set you used. Format as a markdown table with Signal, Preliminary Value, and Rationale columns. The rationale must cite a named artifact (a specific filename, section, table, or URL from the strategy or architecture context) — the SCORE_SIGNALS phase uses this file as input and requires citations for justifications. Do not write the signals table into the epic body.
+
+**Do not set ai_signals.* or investigation_signals.* in the epic frontmatter.** The SCORE_SIGNALS phase writes the final values after running independent scoring rounds.
 
 ## Step 6.5: Health Warnings
 
@@ -260,38 +264,23 @@ For each epic, write in two steps:
 
    **No cross-references to sibling epics.** Do not reference other epics by draft ID (e.g., "E001", "E003") anywhere in the body — not in descriptions, scope, acceptance criteria, or HLR traceability. Draft IDs are internal to the decomposition and meaningless once epics are created in Jira. Dependency relationships are captured by frontmatter `dependencies` and Jira Blocks links. Each epic body must be self-contained: describe what it delivers and depends on in plain terms (e.g., "the OTEL env var injection capability" not "E003") without naming sibling epics.
 
-2. Set frontmatter via script:
+2. Set frontmatter via script. **Do not include ai_signals.* or investigation_signals.* here** — the SCORE_SIGNALS phase writes those after independent scoring rounds.
 
 ```bash
 python3 scripts/frontmatter.py set artifacts/epic-tasks/{ID}-E001.md \
     epic_id="{ID}-E001" title="<epic title>" parent_strat="{ID}" \
     component="<canonical name from .context/rhai-components.txt>" team="<owner team>" \
     type=Implementation priority=P0 \
-    dependencies="{ID}-E002,{ID}-E003" \
-    ai_signals.change_specificity=1 \
-    ai_signals.pattern_precedent=1 \
-    ai_signals.adapter_pattern=0 \
-    ai_signals.existing_foundation=1 \
-    ai_signals.open_questions=-1 \
-    ai_signals.external_dependency=0 \
-    ai_signals.human_process_gates=-1 \
-    ai_signals.repo_access=1 \
-    ai_signals.architecture_claims=1
+    dependencies="{ID}-E002,{ID}-E003"
 ```
 
-For an **Investigation** epic, set `type=Investigation` and write the five
-`investigation_signals` instead of `ai_signals` (do not set both):
+For an **Investigation** epic, set `type=Investigation` (no signal values — same rule):
 
 ```bash
 python3 scripts/frontmatter.py set artifacts/epic-tasks/{ID}-E001.md \
     epic_id="{ID}-E001" title="<epic title>" parent_strat="{ID}" \
     component="<canonical name>" team="<owner team>" \
-    type=Investigation priority=P0 \
-    investigation_signals.question_specificity=1 \
-    investigation_signals.source_accessibility=1 \
-    investigation_signals.local_runnability=1 \
-    investigation_signals.cluster_hardware_dependence=0 \
-    investigation_signals.human_judgment_required=0
+    type=Investigation priority=P0
 ```
 
 Add optional fields only when non-null: `implementation_type=<value>`, `branch=<value>`, `gated_by=<epic_id>`, `gate_failure_impact.action=<value> gate_failure_impact.fallback_approach="<text>"`. Every epic that depends on an Investigation should have `gated_by` pointing to that Investigation (see Rule 3).

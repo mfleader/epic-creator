@@ -161,9 +161,12 @@ class TestTriageSchemaRoundTrip:
 
 def test_phases_list_contains_full_main_sequence():
     expected = [
-        "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP",
-        "REVISE_DECOMP", "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK",
-        "RE_REVISE", "BATCH_DONE", "ERROR_COLLECT", "REPORT", "DONE",
+        "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE",
+        "SCORE_SIGNALS_DECOMP", "REVIEW_DECOMP",
+        "REVISE_DECOMP", "SCORE_SIGNALS_REVISE",
+        "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK", "RE_REVISE",
+        "SCORE_SIGNALS_REREVISE",
+        "BATCH_DONE", "ERROR_COLLECT", "REPORT", "DONE",
     ]
     for phase in expected:
         assert phase in PHASES
@@ -395,19 +398,14 @@ class TestTriage:
 
 
 class TestDecompose:
-    def test_transitions_to_review_decomp(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores"):
-            nxt, _ = advance({"phase": "DECOMPOSE"}, dry_run=False)
-        assert nxt == "REVIEW_DECOMP"
+    def test_transitions_to_score_signals_decomp(self, tmp_dir):
+        nxt, _ = advance({"phase": "DECOMPOSE"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_DECOMP"
 
-    def test_calls_compute_ai_scores_on_active_ids(self, tmp_dir):
+    def test_does_not_call_compute_ai_scores(self, tmp_dir):
+        """DECOMPOSE no longer calls _compute_ai_scores; SCORE_SIGNALS_DECOMP does."""
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
             advance({"phase": "DECOMPOSE"}, dry_run=False)
-        mock_cas.assert_called_once_with("tmp/pipeline-active-ids.txt")
-
-    def test_skips_compute_ai_scores_when_dry_run(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "DECOMPOSE"}, dry_run=True)
         mock_cas.assert_not_called()
 
 
@@ -449,19 +447,14 @@ class TestReviewDecomp:
 
 
 class TestReviseDecomp:
-    def test_transitions_to_re_review_check(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores"):
-            nxt, _ = advance({"phase": "REVISE_DECOMP"}, dry_run=False)
-        assert nxt == "RE_REVIEW_CHECK"
+    def test_transitions_to_score_signals_revise(self, tmp_dir):
+        nxt, _ = advance({"phase": "REVISE_DECOMP"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_REVISE"
 
-    def test_calls_compute_ai_scores_on_active_ids(self, tmp_dir):
+    def test_does_not_call_compute_ai_scores(self, tmp_dir):
+        """REVISE_DECOMP no longer calls _compute_ai_scores; SCORE_SIGNALS_REVISE does."""
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
             advance({"phase": "REVISE_DECOMP"}, dry_run=False)
-        mock_cas.assert_called_once_with("tmp/pipeline-active-ids.txt")
-
-    def test_skips_compute_ai_scores_when_dry_run(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "REVISE_DECOMP"}, dry_run=True)
         mock_cas.assert_not_called()
 
 
@@ -587,19 +580,14 @@ class TestReviseCheck:
 
 
 class TestReRevise:
-    def test_transitions_to_re_review_check(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores"):
-            nxt, _ = advance({"phase": "RE_REVISE"}, dry_run=False)
-        assert nxt == "RE_REVIEW_CHECK"
+    def test_transitions_to_score_signals_rerevise(self, tmp_dir):
+        nxt, _ = advance({"phase": "RE_REVISE"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_REREVISE"
 
-    def test_calls_compute_ai_scores_on_revise_ids(self, tmp_dir):
+    def test_does_not_call_compute_ai_scores(self, tmp_dir):
+        """RE_REVISE no longer calls _compute_ai_scores; SCORE_SIGNALS_REREVISE does."""
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
             advance({"phase": "RE_REVISE"}, dry_run=False)
-        mock_cas.assert_called_once_with("tmp/pipeline-revise-ids.txt")
-
-    def test_skips_compute_ai_scores_when_dry_run(self, tmp_dir):
-        with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "RE_REVISE"}, dry_run=True)
         mock_cas.assert_not_called()
 
 
@@ -685,20 +673,337 @@ class TestReport:
         assert nxt == "DONE"
 
 
-# ── _compute_ai_scores called at exactly three transitions ─────────────────────
+# ── SCORE_SIGNALS phases ──────────────────────────────────────────────────────
+
+
+class TestScoreSignals:
+    """Tests for all three SCORE_SIGNALS interception points."""
+
+    # ── SCORE_SIGNALS_DECOMP ──────────────────────────────────────────────────
+
+    def test_score_signals_decomp_transitions_to_review_decomp(self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores"):
+            nxt, _ = advance({"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=False)
+        assert nxt == "REVIEW_DECOMP"
+
+    def test_score_signals_decomp_calls_compute_ai_scores_on_active_ids(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=False)
+        mock_cas.assert_called_once_with("tmp/pipeline-active-ids.txt")
+
+    def test_score_signals_decomp_skips_compute_ai_scores_when_dry_run(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=True)
+        mock_cas.assert_not_called()
+
+    def test_score_signals_decomp_summary_mentions_phase_names(self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores"):
+            _, summary = advance(
+                {"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=False)
+        assert "SCORE_SIGNALS_DECOMP" in summary
+        assert "REVIEW_DECOMP" in summary
+
+    # ── SCORE_SIGNALS_REVISE ─────────────────────────────────────────────────
+
+    def test_score_signals_revise_transitions_to_re_review_check(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores"):
+            nxt, _ = advance(
+                {"phase": "SCORE_SIGNALS_REVISE"}, dry_run=False)
+        assert nxt == "RE_REVIEW_CHECK"
+
+    def test_score_signals_revise_calls_compute_ai_scores_on_active_ids(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_REVISE"}, dry_run=False)
+        mock_cas.assert_called_once_with("tmp/pipeline-active-ids.txt")
+
+    def test_score_signals_revise_skips_compute_ai_scores_when_dry_run(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_REVISE"}, dry_run=True)
+        mock_cas.assert_not_called()
+
+    # ── SCORE_SIGNALS_REREVISE ───────────────────────────────────────────────
+
+    def test_score_signals_rerevise_transitions_to_re_review_check(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores"):
+            nxt, _ = advance(
+                {"phase": "SCORE_SIGNALS_REREVISE"}, dry_run=False)
+        assert nxt == "RE_REVIEW_CHECK"
+
+    def test_score_signals_rerevise_calls_compute_ai_scores_on_revise_ids(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_REREVISE"}, dry_run=False)
+        mock_cas.assert_called_once_with("tmp/pipeline-revise-ids.txt")
+
+    def test_score_signals_rerevise_skips_compute_ai_scores_when_dry_run(
+            self, tmp_dir):
+        with patch("pipeline_state._compute_ai_scores") as mock_cas:
+            advance({"phase": "SCORE_SIGNALS_REREVISE"}, dry_run=True)
+        mock_cas.assert_not_called()
+
+    # ── Full chain interception ────────────────────────────────────────────
+
+    def test_decompose_goes_to_score_signals_not_review(self, tmp_dir):
+        """DECOMPOSE must route to SCORE_SIGNALS_DECOMP, not skip to REVIEW_DECOMP."""
+        nxt, _ = advance({"phase": "DECOMPOSE"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_DECOMP"
+        assert nxt != "REVIEW_DECOMP"
+
+    def test_revise_decomp_goes_to_score_signals_not_re_review_check(
+            self, tmp_dir):
+        """REVISE_DECOMP must route to SCORE_SIGNALS_REVISE before RE_REVIEW_CHECK."""
+        nxt, _ = advance({"phase": "REVISE_DECOMP"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_REVISE"
+        assert nxt != "RE_REVIEW_CHECK"
+
+    def test_re_revise_goes_to_score_signals_not_re_review_check(
+            self, tmp_dir):
+        """RE_REVISE must route to SCORE_SIGNALS_REREVISE before RE_REVIEW_CHECK."""
+        nxt, _ = advance({"phase": "RE_REVISE"}, dry_run=True)
+        assert nxt == "SCORE_SIGNALS_REREVISE"
+        assert nxt != "RE_REVIEW_CHECK"
+
+
+# ── Signal consistency round-trip (no stubbed frontmatter IO) ─────────────────
+
+
+class TestSignalConsistencyRoundTrip:
+    """Verify the scorer write path: seed from decompose output, apply
+    signal_consistency, re-validate.  No stubbed IO — exercises real
+    read_frontmatter / update_frontmatter / validate calls."""
+
+    def test_implementation_epic_signal_consistency_roundtrip(self, tmp_dir):
+        """Seed from decompose literal output; scorer writes ai_signals +
+        signal_consistency; merged file validates."""
+        from artifact_utils import (
+            read_frontmatter, write_frontmatter, update_frontmatter, validate
+        )
+
+        epic_file = "artifacts/epic-tasks/RHAISTRAT-1-E001.md"
+        Path(epic_file).parent.mkdir(parents=True, exist_ok=True)
+
+        # Seed: decompose's literal output (after removing signal writes)
+        write_frontmatter(epic_file, {
+            "epic_id": "RHAISTRAT-1-E001",
+            "title": "Implement model-serving integration",
+            "parent_strat": "RHAISTRAT-1",
+            "component": "model-serving",
+            "team": "model-serving",
+            "type": "Implementation",
+            "priority": "P0",
+        }, "epic-task")
+
+        # Scorer writes signal values (modal from k runs) + signal_consistency
+        update_frontmatter(epic_file, {
+            "ai_signals": {
+                "change_specificity": 1,
+                "pattern_precedent": 1,
+                "adapter_pattern": 0,
+                "existing_foundation": 1,
+                "open_questions": -1,
+                "external_dependency": 0,
+                "human_process_gates": 0,
+                "repo_access": 1,
+                "architecture_claims": 0,
+            },
+            "signal_consistency": {
+                "change_specificity":   {"tier": "high",       "runs": 3},
+                "pattern_precedent":    {"tier": "high",       "runs": 3},
+                "adapter_pattern":      {"tier": "high",       "runs": 3},
+                "existing_foundation":  {"tier": "high",       "runs": 3},
+                "open_questions":       {"tier": "medium",     "runs": 5},
+                "external_dependency":  {"tier": "high",       "runs": 3},
+                "human_process_gates":  {"tier": "high",       "runs": 3},
+                "repo_access":          {"tier": "high",       "runs": 3},
+                "architecture_claims":  {"tier": "unresolved", "runs": 5},
+            },
+        }, "epic-task")
+
+        data, _ = read_frontmatter(epic_file)
+        errors = validate(data, "epic-task")
+        assert not errors, f"Validation errors: {errors}"
+        assert "signal_consistency" in data
+        assert data["signal_consistency"]["change_specificity"]["tier"] == "high"
+        assert data["signal_consistency"]["open_questions"]["runs"] == 5
+        assert data["signal_consistency"]["architecture_claims"]["tier"] == "unresolved"
+        assert data["ai_signals"]["change_specificity"] == 1
+
+    def test_investigation_epic_signal_consistency_roundtrip(self, tmp_dir):
+        """Investigation epic: investigation_signals + signal_consistency validate."""
+        from artifact_utils import (
+            read_frontmatter, write_frontmatter, update_frontmatter, validate
+        )
+
+        epic_file = "artifacts/epic-tasks/RHAISTRAT-2-E001.md"
+        Path(epic_file).parent.mkdir(parents=True, exist_ok=True)
+
+        write_frontmatter(epic_file, {
+            "epic_id": "RHAISTRAT-2-E001",
+            "title": "Investigate RBAC feasibility",
+            "parent_strat": "RHAISTRAT-2",
+            "component": "auth",
+            "team": "auth",
+            "type": "Investigation",
+            "priority": "P1",
+        }, "epic-task")
+
+        update_frontmatter(epic_file, {
+            "investigation_signals": {
+                "question_specificity": 1,
+                "source_accessibility": 1,
+                "local_runnability": 0,
+                "cluster_hardware_dependence": -1,
+                "human_judgment_required": 0,
+            },
+            "signal_consistency": {
+                "question_specificity":      {"tier": "high",   "runs": 3},
+                "source_accessibility":      {"tier": "medium", "runs": 3},
+                "local_runnability":         {"tier": "high",   "runs": 3},
+                "cluster_hardware_dependence": {"tier": "high", "runs": 3},
+                "human_judgment_required":   {"tier": "high",   "runs": 3},
+            },
+        }, "epic-task")
+
+        data, _ = read_frontmatter(epic_file)
+        errors = validate(data, "epic-task")
+        assert not errors, f"Validation errors: {errors}"
+        assert data["signal_consistency"]["question_specificity"]["tier"] == "high"
+        assert data["investigation_signals"]["question_specificity"] == 1
+
+    def test_rescoring_overwrites_prior_signal_consistency(self, tmp_dir):
+        """If an epic is re-scored (SCORE_SIGNALS_REVISE), the new write
+        replaces the old signal_consistency entirely."""
+        from artifact_utils import (
+            read_frontmatter, write_frontmatter, update_frontmatter, validate
+        )
+
+        epic_file = "artifacts/epic-tasks/RHAISTRAT-3-E001.md"
+        Path(epic_file).parent.mkdir(parents=True, exist_ok=True)
+
+        write_frontmatter(epic_file, {
+            "epic_id": "RHAISTRAT-3-E001",
+            "title": "Rescore test",
+            "parent_strat": "RHAISTRAT-3",
+            "component": "auth",
+            "team": "auth",
+            "type": "Implementation",
+            "priority": "P2",
+        }, "epic-task")
+
+        # First scoring
+        update_frontmatter(epic_file, {
+            "ai_signals": {"change_specificity": 0},
+            "signal_consistency": {
+                "change_specificity": {"tier": "medium", "runs": 3},
+            },
+        }, "epic-task")
+
+        # Re-scoring (after REVISE_DECOMP) replaces the block
+        update_frontmatter(epic_file, {
+            "ai_signals": {"change_specificity": 1},
+            "signal_consistency": {
+                "change_specificity": {"tier": "high", "runs": 3},
+            },
+        }, "epic-task")
+
+        data, _ = read_frontmatter(epic_file)
+        errors = validate(data, "epic-task")
+        assert not errors, f"Validation errors: {errors}"
+        # New value must win
+        assert data["ai_signals"]["change_specificity"] == 1
+        assert data["signal_consistency"]["change_specificity"]["tier"] == "high"
+
+
+# ── Score-signals poller ──────────────────────────────────────────────────────
+
+
+class TestScoreSignalsPoller:
+    def test_pending_when_decomp_absent(self, tmp_dir):
+        from check_decompose_progress import check_id
+        assert check_id("score_signals", "RHAISTRAT-1") == "pending"
+
+    def test_pending_when_epic_count_zero(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text("---\ntriage: proceed\nepic_count: 0\n---\n")
+        assert check_id("score_signals", "RHAISTRAT-1") == "pending"
+
+    def test_pending_when_epic_files_missing(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text("---\ntriage: proceed\nepic_count: 2\n---\n")
+        # No epic files on disk
+        assert check_id("score_signals", "RHAISTRAT-1") == "pending"
+
+    def test_pending_when_some_epics_lack_signal_consistency(self, tmp_dir):
+        from check_decompose_progress import check_id
+        base = Path("artifacts/epic-tasks")
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "RHAISTRAT-1-decomposition.md").write_text(
+            "---\nepic_count: 2\n---\n")
+        # First epic scored, second not
+        (base / "RHAISTRAT-1-E001.md").write_text(
+            "---\nsignal_consistency:\n  change_specificity:\n    tier: high\n    runs: 3\n---\n"
+        )
+        (base / "RHAISTRAT-1-E002.md").write_text(
+            "---\nepic_id: RHAISTRAT-1-E002\n---\n"
+        )
+        assert check_id("score_signals", "RHAISTRAT-1") == "pending"
+
+    def test_completed_when_all_epics_have_signal_consistency(self, tmp_dir):
+        from check_decompose_progress import check_id
+        base = Path("artifacts/epic-tasks")
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "RHAISTRAT-1-decomposition.md").write_text(
+            "---\nepic_count: 2\n---\n")
+        for n in ("E001", "E002"):
+            (base / f"RHAISTRAT-1-{n}.md").write_text(
+                f"---\nsignal_consistency:\n  change_specificity:\n    tier: high\n    runs: 3\n---\n"
+            )
+        assert check_id("score_signals", "RHAISTRAT-1") == "completed"
+
+    def test_completed_includes_branch_epics(self, tmp_dir):
+        """BRANCH epic files count toward the completion check."""
+        from check_decompose_progress import check_id
+        base = Path("artifacts/epic-tasks")
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "RHAISTRAT-2-decomposition.md").write_text(
+            "---\nepic_count: 2\n---\n")
+        (base / "RHAISTRAT-2-E001.md").write_text(
+            "---\nsignal_consistency:\n  change_specificity:\n    tier: high\n    runs: 3\n---\n"
+        )
+        (base / "RHAISTRAT-2-BRANCH-A-E002.md").write_text(
+            "---\nsignal_consistency:\n  change_specificity:\n    tier: medium\n    runs: 5\n---\n"
+        )
+        assert check_id("score_signals", "RHAISTRAT-2") == "completed"
+
+
+# ── _compute_ai_scores called at exactly three SCORE_SIGNALS transitions ────────
 
 
 class TestComputeAiScoresCoverage:
     def test_scoring_phases_call_it_exactly_three_times(self, tmp_dir):
-        """_compute_ai_scores fires at DECOMPOSE, REVISE_DECOMP, RE_REVISE only."""
+        """_compute_ai_scores fires at SCORE_SIGNALS_DECOMP/REVISE/REREVISE only."""
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "DECOMPOSE"}, dry_run=False)
-            advance({"phase": "REVISE_DECOMP"}, dry_run=False)
-            advance({"phase": "RE_REVISE"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_REVISE"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_REREVISE"}, dry_run=False)
         assert mock_cas.call_count == 3
 
     def test_non_scoring_phases_do_not_call_it(self, tmp_dir):
-        """None of the other phases invoke _compute_ai_scores."""
+        """None of the non-SCORE_SIGNALS phases invoke _compute_ai_scores.
+
+        Includes DECOMPOSE, REVISE_DECOMP, and RE_REVISE which previously
+        called it but now delegate to their respective SCORE_SIGNALS phases.
+        """
         _write_ids("tmp/pipeline-active-ids.txt", [])
         _write_ids("tmp/pipeline-revise-ids.txt", [])
         _write_ids("tmp/pipeline-all-ids.txt", [])
@@ -710,13 +1015,19 @@ class TestComputeAiScoresCoverage:
                     read_frontmatter=rfm)
             advance({"phase": "FETCH"}, dry_run=True, read_frontmatter=rfm)
             advance({"phase": "TRIAGE"}, dry_run=True, read_frontmatter=rfm)
+            advance({"phase": "DECOMPOSE"}, dry_run=False,
+                    read_frontmatter=rfm)
             advance({"phase": "REVIEW_DECOMP"}, dry_run=True,
+                    read_frontmatter=rfm)
+            advance({"phase": "REVISE_DECOMP"}, dry_run=False,
                     read_frontmatter=rfm)
             advance({"phase": "RE_REVIEW_CHECK", "revise_cycle": 0},
                     dry_run=True, read_frontmatter=rfm)
             advance({"phase": "RE_REVIEW"}, dry_run=True, read_frontmatter=rfm)
             advance({"phase": "REVISE_CHECK", "revise_cycle": 0},
                     dry_run=True, read_frontmatter=rfm)
+            advance({"phase": "RE_REVISE"}, dry_run=False,
+                    read_frontmatter=rfm)
             advance({"phase": "BATCH_DONE", "batch": 1, "total_batches": 1,
                      "retry_cycle": 1}, dry_run=True, read_frontmatter=rfm)
             advance({"phase": "ERROR_COLLECT", "total_batches": 0},
@@ -725,19 +1036,19 @@ class TestComputeAiScoresCoverage:
 
         mock_cas.assert_not_called()
 
-    def test_decompose_uses_active_ids_file(self, tmp_dir):
+    def test_score_signals_decomp_uses_active_ids_file(self, tmp_dir):
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "DECOMPOSE"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_DECOMP"}, dry_run=False)
         assert mock_cas.call_args == call("tmp/pipeline-active-ids.txt")
 
-    def test_revise_decomp_uses_active_ids_file(self, tmp_dir):
+    def test_score_signals_revise_uses_active_ids_file(self, tmp_dir):
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "REVISE_DECOMP"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_REVISE"}, dry_run=False)
         assert mock_cas.call_args == call("tmp/pipeline-active-ids.txt")
 
-    def test_re_revise_uses_revise_ids_file(self, tmp_dir):
+    def test_score_signals_rerevise_uses_revise_ids_file(self, tmp_dir):
         with patch("pipeline_state._compute_ai_scores") as mock_cas:
-            advance({"phase": "RE_REVISE"}, dry_run=False)
+            advance({"phase": "SCORE_SIGNALS_REREVISE"}, dry_run=False)
         assert mock_cas.call_args == call("tmp/pipeline-revise-ids.txt")
 
 
