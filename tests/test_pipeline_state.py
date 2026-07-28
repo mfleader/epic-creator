@@ -1075,6 +1075,25 @@ class TestScoreSignalsPoller:
         )
         assert check_id("score_signals", "RHAISTRAT-2") == "completed"
 
+    def test_ai_signals_sibling_does_not_block_completion(self, tmp_dir):
+        """Rationale files ({id}-ENNN-ai-signals.md) must not prevent score_signals
+        from reporting completed — they are not epic files and have no signal_consistency."""
+        from check_decompose_progress import check_id
+        base = Path("artifacts/epic-tasks")
+        base.mkdir(parents=True, exist_ok=True)
+        # Write decomposition summary with epic_count=1
+        (base / "RHAISTRAT-99-decomposition.md").write_text(
+            "---\nepic_count: 1\n---\n")
+        # Write the real epic with signal_consistency
+        (base / "RHAISTRAT-99-E001.md").write_text(
+            "---\nsignal_consistency:\n  change_specificity:\n    tier: high\n    runs: 3\n---\n"
+        )
+        # Write the ai-signals rationale sibling — must NOT block completion
+        (base / "RHAISTRAT-99-E001-ai-signals.md").write_text(
+            "# Rationale file — no signal_consistency\n"
+        )
+        assert check_id("score_signals", "RHAISTRAT-99") == "completed"
+
 
 # ── _compute_ai_scores called at exactly three SCORE_SIGNALS transitions ────────
 
@@ -1326,3 +1345,26 @@ class TestPollerQuirk:
         # After reset: key gone → pending
         _reset_revised_flag(decomp, read_frontmatter=read_frontmatter)
         assert check_id("revise_decomp", "RHAISTRAT-1") == "pending"
+
+
+# ── epic_files() helper ────────────────────────────────────────────────────────
+
+
+class TestEpicFilesHelper:
+    def test_excludes_ai_signals_rationale_files(self, tmp_dir):
+        """epic_files() must not return {id}-ENNN-ai-signals.md files."""
+        from artifact_utils import epic_files
+        base = Path("artifacts/epic-tasks")
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "RHAISTRAT-77-E001.md").write_text("")
+        (base / "RHAISTRAT-77-E001-ai-signals.md").write_text("")
+        (base / "RHAISTRAT-77-E002.md").write_text("")
+        (base / "RHAISTRAT-77-BRANCH-A-E003.md").write_text("")
+        result = epic_files("RHAISTRAT-77")
+        names = [os.path.basename(p) for p in result]
+        assert "RHAISTRAT-77-E001-ai-signals.md" not in names
+        assert sorted(names) == [
+            "RHAISTRAT-77-BRANCH-A-E003.md",
+            "RHAISTRAT-77-E001.md",
+            "RHAISTRAT-77-E002.md",
+        ]

@@ -23,10 +23,11 @@ CITATION_DEMOTION = {CITATION_DEMOTION}  # demote tier when justification lacks 
 List all epic files for this strategy:
 
 ```bash
-ls artifacts/epic-tasks/{ID}-E*.md artifacts/epic-tasks/{ID}-BRANCH-*-E*.md 2>/dev/null | sort
+ls artifacts/epic-tasks/{ID}-E*.md artifacts/epic-tasks/{ID}-BRANCH-*-E*.md \
+  2>/dev/null | grep -E -- '-E[0-9]+\.md$' | sort
 ```
 
-Exclude any file ending in `-decomposition.md`. If no epic files exist, stop — the scorer has nothing to score.
+The grep positive-match (`-E[0-9]+\.md$`) retains only true epic files. Rationale files (`{ID}-ENNN-ai-signals.md`) end with `-ai-signals.md`, not `-E[0-9]+\.md`, so they are excluded. If no epic files exist, stop — the scorer has nothing to score.
 
 ## Step 1: For each epic file, score all signals
 
