@@ -52,7 +52,7 @@ _BlockDumper.add_representer(str, _str_representer)
 # ---------- Phase enum ----------
 
 PHASES = [
-    "BATCH_START", "FETCH", "DECOMPOSE", "REVIEW_DECOMP",
+    "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP",
     "REVISE_DECOMP",
     "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK", "RE_REVISE",
     "BATCH_DONE", "ERROR_COLLECT",
@@ -69,6 +69,16 @@ PHASE_CONFIG = {
         "ids_file": "tmp/pipeline-active-ids.txt",
         "poll_phase": "fetch",
         "vars": {"ID": "{ID}"},
+    },
+    "TRIAGE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/triage-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "triage",
+        "vars": {"ID": "{ID}"},
+        "k": 5,
+        "threshold": 4,
+        "sample_model": None,
     },
     "DECOMPOSE": {
         "type": "agent",
@@ -204,7 +214,7 @@ def _compute_ai_scores(ids_file):
 
 # ---------- Transition logic ----------
 
-MAIN_SEQUENCE = ["FETCH", "DECOMPOSE", "REVIEW_DECOMP"]
+MAIN_SEQUENCE = ["FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP"]
 
 
 def advance(state, dry_run=False, read_frontmatter=None):
@@ -229,9 +239,37 @@ def advance(state, dry_run=False, read_frontmatter=None):
     # --- Linear main sequence ---
     if phase in MAIN_SEQUENCE[:-1]:
         nxt = MAIN_SEQUENCE[MAIN_SEQUENCE.index(phase) + 1]
+        extra = ""
         if phase == "DECOMPOSE" and not dry_run:
             _compute_ai_scores("tmp/pipeline-active-ids.txt")
-        return nxt, f"{phase} → {nxt}"
+        if phase == "TRIAGE" and not dry_run:
+            active_ids = _read_ids("tmp/pipeline-active-ids.txt")
+            triage_cfg = PHASE_CONFIG.get("TRIAGE", {})
+            abstained = []
+            for strat_id in active_ids:
+                stub = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
+                if os.path.exists(stub):
+                    try:
+                        data, _ = _rfm(stub)
+                        if data and data.get("triage") == "abstained":
+                            abstained.append(strat_id)
+                    except Exception:
+                        pass
+            non_abstained = [sid for sid in active_ids
+                             if sid not in abstained]
+            state["triage_abstained_count"] = len(abstained)
+            total = max(len(active_ids), 1)
+            rate = len(abstained) / total
+            state["triage_abstention_rate"] = rate
+            if rate > 0.20:
+                state["triage_distribution_shift_warning"] = True
+            _write_ids("tmp/pipeline-active-ids.txt", non_abstained)
+            extra = (f" abstained={len(abstained)}"
+                     f" non_abstained={len(non_abstained)}"
+                     f" rate={rate:.0%}")
+            if rate > 0.20:
+                extra += " DISTRIBUTION_SHIFT_WARNING"
+        return nxt, f"{phase} → {nxt}{extra}"
 
     # --- REVIEW_DECOMP → REVISE_DECOMP (unconditional first revision) ---
     if phase == "REVIEW_DECOMP":

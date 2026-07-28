@@ -19,6 +19,7 @@ from artifact_utils import read_frontmatter
 
 PHASE_CHECKS = {
     "fetch": lambda id: f"artifacts/strat-tasks/{id}.md",
+    "triage": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "decompose": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "review_decomp": lambda id: f"artifacts/epic-reviews/{id}-decomp-review.md",
     "revise_decomp": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
@@ -37,6 +38,16 @@ def check_id(phase, strat_id):
     path = PHASE_CHECKS[phase](strat_id)
     if not os.path.exists(path):
         return "pending"
+    if phase == "triage":
+        try:
+            data, _ = read_frontmatter(path)
+        except Exception:
+            return "pending"
+        if not data:
+            return "pending"
+        if data.get("triage") is None:
+            return "pending"
+        return "completed"
     if phase == "decompose":
         try:
             data, _ = read_frontmatter(path)
