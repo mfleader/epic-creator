@@ -50,7 +50,7 @@ def _make_rfm(path_to_data):
 
 def test_phases_list_contains_full_main_sequence():
     expected = [
-        "BATCH_START", "FETCH", "DECOMPOSE", "REVIEW_DECOMP",
+        "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE", "REVIEW_DECOMP",
         "REVISE_DECOMP", "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK",
         "RE_REVISE", "BATCH_DONE", "ERROR_COLLECT", "REPORT", "DONE",
     ]
@@ -78,9 +78,206 @@ class TestBatchStart:
 
 
 class TestFetch:
-    def test_transitions_to_decompose(self, tmp_dir):
+    def test_transitions_to_triage(self, tmp_dir):
         nxt, _ = advance({"phase": "FETCH"}, dry_run=True)
+        assert nxt == "TRIAGE"
+
+
+# ── TRIAGE ─────────────────────────────────────────────────────────────────────
+
+
+class TestTriage:
+    def test_transitions_to_decompose_dry_run(self, tmp_dir):
+        nxt, _ = advance({"phase": "TRIAGE"}, dry_run=True)
         assert nxt == "DECOMPOSE"
+
+    def test_transitions_to_decompose_with_all_proceed(self, tmp_dir):
+        ids = ["RHAISTRAT-1", "RHAISTRAT-2"]
+        _write_ids("tmp/pipeline-active-ids.txt", ids)
+        stubs = {
+            f"artifacts/epic-tasks/{sid}-decomposition.md": (
+                {"triage": "proceed", "epic_count": 0}, ""
+            )
+            for sid in ids
+        }
+        for path, (data, _) in stubs.items():
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        nxt, _ = advance(state, dry_run=False, read_frontmatter=rfm)
+        assert nxt == "DECOMPOSE"
+
+    def test_removes_abstained_ids_from_active_list(self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2", "RHAISTRAT-3"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+
+        from pathlib import Path
+        remaining = Path("tmp/pipeline-active-ids.txt").read_text().split()
+        assert remaining == ["RHAISTRAT-2"]
+
+    def test_stores_abstained_count_in_state(self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2", "RHAISTRAT-3", "RHAISTRAT-4"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-4-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+        assert state["triage_abstained_count"] == 1
+
+    def test_stores_abstention_rate_in_state(self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+        assert state["triage_abstention_rate"] == pytest.approx(0.5)
+
+    def test_sets_distribution_shift_warning_when_rate_exceeds_20_percent(
+            self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2", "RHAISTRAT-3", "RHAISTRAT-4",
+                    "RHAISTRAT-5"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-4-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-5-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+        # 2/5 = 40% > 20% threshold
+        assert state.get("triage_distribution_shift_warning") is True
+
+    def test_no_distribution_shift_warning_when_rate_at_or_below_20_percent(
+            self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2", "RHAISTRAT-3",
+                    "RHAISTRAT-4", "RHAISTRAT-5"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-4-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-5-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+        # 1/5 = 20% — NOT above threshold (must be strictly greater than 20%)
+        assert "triage_distribution_shift_warning" not in state
+
+    def test_dry_run_does_not_modify_state_or_ids(self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=True, read_frontmatter=rfm)
+
+        # State not modified
+        assert "triage_abstained_count" not in state
+        assert "triage_abstention_rate" not in state
+
+        # Active IDs file not modified
+        from pathlib import Path
+        remaining = Path("tmp/pipeline-active-ids.txt").read_text().split()
+        assert set(remaining) == {"RHAISTRAT-1", "RHAISTRAT-2"}
+
+    def test_summary_includes_distribution_shift_warning_text(self, tmp_dir):
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-1", "RHAISTRAT-2", "RHAISTRAT-3"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md":
+                ({"triage": "proceed", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        _, summary = advance(state, dry_run=False, read_frontmatter=rfm)
+        assert "DISTRIBUTION_SHIFT_WARNING" in summary
+
+    def test_abstained_strategy_excluded_from_active_ids_before_decompose(
+            self, tmp_dir):
+        """After TRIAGE advance, abstained IDs are removed so DECOMPOSE
+        never polls them."""
+        _write_ids("tmp/pipeline-active-ids.txt",
+                   ["RHAISTRAT-A", "RHAISTRAT-B"])
+        stubs = {
+            "artifacts/epic-tasks/RHAISTRAT-A-decomposition.md":
+                ({"triage": "abstained", "epic_count": 0}, ""),
+            "artifacts/epic-tasks/RHAISTRAT-B-decomposition.md":
+                ({"triage": "below-threshold", "epic_count": 0}, ""),
+        }
+        for path in stubs:
+            _touch(path)
+        rfm = _make_rfm(stubs)
+        state = {"phase": "TRIAGE"}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+
+        from pathlib import Path
+        active = Path("tmp/pipeline-active-ids.txt").read_text().split()
+        assert "RHAISTRAT-A" not in active
+        assert "RHAISTRAT-B" in active
 
 
 # ── DECOMPOSE ──────────────────────────────────────────────────────────────────
@@ -401,6 +598,7 @@ class TestComputeAiScoresCoverage:
             advance({"phase": "BATCH_START", "batch": 0}, dry_run=True,
                     read_frontmatter=rfm)
             advance({"phase": "FETCH"}, dry_run=True, read_frontmatter=rfm)
+            advance({"phase": "TRIAGE"}, dry_run=True, read_frontmatter=rfm)
             advance({"phase": "REVIEW_DECOMP"}, dry_run=True,
                     read_frontmatter=rfm)
             advance({"phase": "RE_REVIEW_CHECK", "revise_cycle": 0},
@@ -505,6 +703,62 @@ class TestResetRevisedFlag:
             advance(state, dry_run=False, read_frontmatter=rfm)
 
         mock_reset.assert_not_called()
+
+
+# ── Triage poller ──────────────────────────────────────────────────────────────
+
+
+class TestTriagePoller:
+    def test_pending_when_stub_absent(self, tmp_dir):
+        from check_decompose_progress import check_id
+        assert check_id("triage", "RHAISTRAT-1") == "pending"
+
+    def test_pending_when_stub_has_no_triage_field(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        from pathlib import Path
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text("---\nepic_count: 0\n---\n")
+        assert check_id("triage", "RHAISTRAT-1") == "pending"
+
+    def test_completed_when_triage_is_proceed(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        from pathlib import Path
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text(
+            "---\ntriage: proceed\nepic_count: 0\n---\n")
+        assert check_id("triage", "RHAISTRAT-1") == "completed"
+
+    def test_completed_when_triage_is_abstained(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        from pathlib import Path
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text(
+            "---\ntriage: abstained\nepic_count: 0\n---\n")
+        assert check_id("triage", "RHAISTRAT-1") == "completed"
+
+    def test_completed_when_triage_is_below_threshold(self, tmp_dir):
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        from pathlib import Path
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text(
+            "---\ntriage: below-threshold\nepic_count: 0\n---\n")
+        assert check_id("triage", "RHAISTRAT-1") == "completed"
+
+    def test_decompose_poller_returns_pending_for_stub_with_epic_count_zero(
+            self, tmp_dir):
+        """Triage stubs have epic_count: 0; the decompose poller must not
+        count them as completed."""
+        from check_decompose_progress import check_id
+        stub = "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        from pathlib import Path
+        Path(stub).parent.mkdir(parents=True, exist_ok=True)
+        Path(stub).write_text(
+            "---\ntriage: proceed\nepic_count: 0\n---\n")
+        assert check_id("decompose", "RHAISTRAT-1") == "pending"
 
 
 # ── Poller quirk: any non-None revised counts as completed ────────────────────
