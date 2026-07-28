@@ -6,7 +6,6 @@ to parse ``NEXT_POLL`` values.
 """
 
 import argparse
-import glob
 import os
 import sys
 import time
@@ -14,7 +13,7 @@ import time
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import read_frontmatter
+from artifact_utils import read_frontmatter, epic_files as _epic_files
 
 
 PHASE_CHECKS = {
@@ -28,10 +27,8 @@ PHASE_CHECKS = {
 
 
 def _count_epic_files(strat_id):
-    """Count epic files on disk for a strategy (includes BRANCH files)."""
-    pattern = f"artifacts/epic-tasks/{strat_id}-*E*.md"
-    return sum(1 for f in glob.glob(pattern)
-               if not f.endswith("-decomposition.md"))
+    """Count true epic files for a strategy (excludes rationale files)."""
+    return len(_epic_files(strat_id))
 
 
 def check_id(phase, strat_id):
@@ -62,14 +59,10 @@ def check_id(phase, strat_id):
         epic_count = data.get("epic_count") or 0
         if not epic_count:
             return "pending"
-        epic_files = [
-            f for f in glob.glob(
-                f"artifacts/epic-tasks/{strat_id}-*E*.md")
-            if not f.endswith("-decomposition.md")
-        ]
-        if len(epic_files) < epic_count:
+        epic_file_list = _epic_files(strat_id)
+        if len(epic_file_list) < epic_count:
             return "pending"
-        for ef in epic_files:
+        for ef in epic_file_list:
             try:
                 d, _ = read_frontmatter(ef)
                 if not d or d.get("signal_consistency") is None:

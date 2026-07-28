@@ -496,6 +496,29 @@ def write_frontmatter(path, data, schema_type):
         f.write(content)
 
 
+def epic_files(strat_id):
+    """Return sorted list of true epic file paths for a strategy.
+
+    Matches ONLY:
+    - {strat_id}-E<digits>.md  (regular epics)
+    - {strat_id}-BRANCH-<any>-E<digits>.md  (conditional branch epics)
+
+    Rationale files ({strat_id}-E<digits>-ai-signals.md) are excluded
+    by the positive match — they do not end with exactly -E<digits>.md.
+    """
+    import re, glob as _glob
+    prefix = re.escape(strat_id)
+    pattern = f"artifacts/epic-tasks/{strat_id}-*.md"
+    regular = re.compile(rf"^{prefix}-E\d+\.md$")
+    branch  = re.compile(rf"^{prefix}-BRANCH-.+-E\d+\.md$")
+    results = []
+    for path in _glob.glob(pattern):
+        name = os.path.basename(path)
+        if regular.match(name) or branch.match(name):
+            results.append(path)
+    return sorted(results)
+
+
 def update_frontmatter(path, updates, schema_type):
     """Merge updates into existing frontmatter and rewrite.
 
