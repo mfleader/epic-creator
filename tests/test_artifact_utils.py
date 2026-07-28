@@ -11,6 +11,7 @@ from artifact_utils import (
     SCHEMAS,
     ValidationError,
     apply_defaults,
+    epic_strat_ids,
     read_frontmatter,
     read_frontmatter_validated,
     update_frontmatter,
@@ -291,3 +292,25 @@ class TestUpdateFrontmatter:
         assert len(result["issues"]) == 1
         assert result["issues"][0]["severity"] == "minor"
         assert result["issues"][0]["criterion"] == "DAG Coherence"
+
+
+class TestEpicStratIds:
+    def test_excludes_rationale_and_derives_branch_id(self, tmp_dir):
+        # Regular epic, branch epic, and both of their -ai-signals rationale
+        # siblings. The id set must contain exactly the one true strategy id:
+        # the rationale files are excluded, and the branch epic yields the base
+        # strat id, not "{id}-BRANCH-A".
+        _write("artifacts/epic-tasks/RHAISTRAT-1-E001.md", "---\nx: 1\n---\n")
+        _write("artifacts/epic-tasks/RHAISTRAT-1-E001-ai-signals.md", "| a | b |\n")
+        _write("artifacts/epic-tasks/RHAISTRAT-1-BRANCH-A-E002.md", "---\nx: 1\n---\n")
+        _write("artifacts/epic-tasks/RHAISTRAT-1-BRANCH-A-E002-ai-signals.md",
+               "| a | b |\n")
+
+        assert epic_strat_ids() == ["RHAISTRAT-1"]
+
+    def test_multiple_strategies(self, tmp_dir):
+        _write("artifacts/epic-tasks/RHAISTRAT-1-E001.md", "---\nx: 1\n---\n")
+        _write("artifacts/epic-tasks/RHAISTRAT-2-E001.md", "---\nx: 1\n---\n")
+        _write("artifacts/epic-tasks/RHAISTRAT-2-E002.md", "---\nx: 1\n---\n")
+
+        assert epic_strat_ids() == ["RHAISTRAT-1", "RHAISTRAT-2"]

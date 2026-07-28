@@ -524,6 +524,32 @@ def epic_files(strat_id):
     return sorted(results)
 
 
+def epic_strat_ids():
+    """Return the sorted list of strategy ids that have at least one epic file.
+
+    Identity-based companion to epic_files() for the compute_ai_scores --all
+    path. Scans artifacts/epic-tasks/ and extracts the strategy id from every
+    true epic filename, handling both regular ({id}-E<digits>.md) and branch
+    ({id}-BRANCH-<any>-E<digits>.md) shapes. Rationale siblings
+    ({id}-E<digits>-ai-signals.md) do not match and are excluded, so they can
+    neither pollute the id set nor mis-derive a branch id.
+    """
+    import re, glob as _glob
+    regular = re.compile(r"^(.+?)-E\d+\.md$")
+    branch  = re.compile(r"^(.+?)-BRANCH-.+-E\d+\.md$")
+    ids = set()
+    for path in _glob.glob("artifacts/epic-tasks/*-E*.md"):
+        name = os.path.basename(path)
+        m = branch.match(name)
+        if m:
+            ids.add(m.group(1))
+            continue
+        m = regular.match(name)
+        if m:
+            ids.add(m.group(1))
+    return sorted(ids)
+
+
 def update_frontmatter(path, updates, schema_type):
     """Merge updates into existing frontmatter and rewrite.
 

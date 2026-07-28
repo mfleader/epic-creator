@@ -19,7 +19,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import read_frontmatter
+from artifact_utils import read_frontmatter, epic_files as _epic_files
 
 SIGNAL_NAMES = [
     "change_specificity", "pattern_precedent", "adapter_pattern",
@@ -223,11 +223,9 @@ def render_strategy_section(strat_id):
     decomp_body = read_body(decomp_path) if os.path.exists(decomp_path) else ""
     review_fm, _ = read_frontmatter(review_path)
 
-    # Collect epic files — includes BRANCH files for conditional decompositions
-    epic_files = sorted(
-        glob.glob(f"artifacts/epic-tasks/{strat_id}-E*.md")
-        + glob.glob(f"artifacts/epic-tasks/{strat_id}-BRANCH-*-E*.md")
-    )
+    # Collect epic files — includes BRANCH files for conditional decompositions,
+    # excludes the -ai-signals rationale siblings (identity-based, not glob).
+    epic_files = _epic_files(strat_id)
     epics = []
     for ef in epic_files:
         fm, _ = read_frontmatter(ef)

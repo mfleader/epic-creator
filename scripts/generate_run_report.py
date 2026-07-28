@@ -2,7 +2,6 @@
 """Generate run report for a decomposition pipeline run."""
 
 import argparse
-import glob
 import os
 import sys
 from datetime import datetime, timezone
@@ -10,7 +9,7 @@ from datetime import datetime, timezone
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import read_frontmatter
+from artifact_utils import read_frontmatter, epic_files as _epic_files
 
 
 def main():
@@ -78,10 +77,7 @@ def main():
                 criterion_affected[crit] = criterion_affected.get(crit, 0) + 1
 
         # Per-epic signal_consistency tier scan (Issue 13)
-        epic_files = (
-            glob.glob(f"artifacts/epic-tasks/{strat_id}-E*.md")
-            + glob.glob(f"artifacts/epic-tasks/{strat_id}-BRANCH-*-E*.md")
-        )
+        epic_files = _epic_files(strat_id)
         for ef in epic_files:
             ef_fm, _ = read_frontmatter(ef)
             sc = ef_fm.get("signal_consistency")

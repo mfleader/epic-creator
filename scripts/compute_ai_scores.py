@@ -16,12 +16,16 @@ Usage:
     python3 scripts/compute_ai_scores.py --all
 """
 
-import glob
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import read_frontmatter, update_frontmatter
+from artifact_utils import (
+    read_frontmatter,
+    update_frontmatter,
+    epic_files as _epic_files,
+    epic_strat_ids,
+)
 
 SIGNAL_FIELDS = [
     "change_specificity",
@@ -138,8 +142,7 @@ def compute_for_epic(epic_path):
 
 def compute_for_strategy(strat_id):
     """Compute scores for all epics of a strategy. Returns count of epics processed."""
-    pattern = f"artifacts/epic-tasks/{strat_id}-E*.md"
-    epic_files = sorted(glob.glob(pattern))
+    epic_files = _epic_files(strat_id)
 
     if not epic_files:
         print(f"  {strat_id}: no epic files found", file=sys.stderr)
@@ -167,14 +170,7 @@ def main():
         sys.exit(1)
 
     if sys.argv[1] == "--all":
-        epic_files = sorted(glob.glob("artifacts/epic-tasks/*-E*.md"))
-        strat_ids = set()
-        for path in epic_files:
-            basename = os.path.basename(path)
-            parts = basename.rsplit("-E", 1)
-            if len(parts) == 2:
-                strat_ids.add(parts[0])
-        strat_ids = sorted(strat_ids)
+        strat_ids = epic_strat_ids()
     else:
         strat_ids = sys.argv[1:]
 

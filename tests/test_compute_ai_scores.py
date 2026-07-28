@@ -8,7 +8,26 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from artifact_utils import read_frontmatter, write_frontmatter
-from compute_ai_scores import classify, classify_investigation, compute_for_epic
+from compute_ai_scores import (
+    classify,
+    classify_investigation,
+    compute_for_epic,
+    compute_for_strategy,
+)
+
+_FULL_SIGNALS = {
+    "change_specificity": 1, "pattern_precedent": 1, "adapter_pattern": 0,
+    "existing_foundation": 1, "open_questions": -1, "external_dependency": 0,
+    "human_process_gates": -1, "repo_access": 1, "architecture_claims": 1,
+}
+
+
+def _write_epic(path, epic_id):
+    write_frontmatter(path, {
+        "epic_id": epic_id, "title": "t", "parent_strat": "RHAISTRAT-1",
+        "component": "c", "team": "t", "priority": "P0",
+        "type": "Implementation", "ai_signals": dict(_FULL_SIGNALS),
+    }, "epic-task")
 
 
 @pytest.fixture
@@ -117,3 +136,29 @@ class TestComputeForEpic:
             "investigation_signals": _inv(spec=1, src=1, run=1),  # +3 if mis-dispatched
         })
         assert cls == "Medium" and score == 1
+
+
+class TestComputeForStrategy:
+    def test_ignores_ai_signals_rationale_sibling(self, tmp_dir):
+        # A real epic plus a rationale sibling that has — through prompt drift —
+        # grown a full ai_signals frontmatter block. Identity-based selection
+        # must score only the real epic; if the sibling were picked up (it has
+        # scorable signals) the processed count would be 2.
+        _write_epic("artifacts/epic-tasks/RHAISTRAT-1-E001.md", "RHAISTRAT-1-E001")
+        _write_epic("artifacts/epic-tasks/RHAISTRAT-1-E001-ai-signals.md",
+                    "RHAISTRAT-1-E001")
+
+        count = compute_for_strategy("RHAISTRAT-1")
+
+        assert count == 1
+
+    def test_scores_branch_epics(self, tmp_dir):
+        # epic_files() includes BRANCH epics, so compute_for_strategy now scores
+        # them too — the old {id}-E*.md glob missed branch epics entirely.
+        _write_epic("artifacts/epic-tasks/RHAISTRAT-1-E001.md", "RHAISTRAT-1-E001")
+        _write_epic("artifacts/epic-tasks/RHAISTRAT-1-BRANCH-A-E002.md",
+                    "RHAISTRAT-1-BRANCH-A-E002")
+
+        count = compute_for_strategy("RHAISTRAT-1")
+
+        assert count == 2
