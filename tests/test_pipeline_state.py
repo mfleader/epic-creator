@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for pipeline_state.py phase-transition logic."""
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import call, patch
@@ -43,6 +44,116 @@ def _make_rfm(path_to_data):
     def _rfm(path):
         return path_to_data.get(path, ({}, ""))
     return _rfm
+
+
+# ── Triage schema round-trip regression ───────────────────────────────────────
+# Regression for the blocker found in gate_3: the raw triage stub written by
+# triage-agent.md contains `triage: proceed` and `triage_verdicts` (a list).
+# Both fields were previously rejected by the decomp-summary schema, causing
+# decompose's `frontmatter.py set` call to fail and `epic_count` to stay 0.
+
+
+class TestTriageSchemaRoundTrip:
+    def test_decompose_set_on_proceed_triage_stub_exits_zero(self, tmp_dir):
+        """frontmatter.py set on a triage: proceed stub must succeed (exit 0)."""
+        _scripts = Path(__file__).parent.parent / "scripts"
+        _frontmatter_py = _scripts / "frontmatter.py"
+
+        # Seed from the LITERAL stub YAML that triage-agent.md emits
+        decomp = tmp_dir / "artifacts/epic-tasks/RHAISTRAT-1-decomposition.md"
+        decomp.parent.mkdir(parents=True, exist_ok=True)
+        decomp.write_text(
+            "---\n"
+            "triage: proceed\n"
+            "triage_verdicts:\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "epic_count: 0\n"
+            "---\n"
+        )
+
+        # Invoke decompose's actual frontmatter.py set path
+        result = subprocess.run(
+            [
+                sys.executable, str(_frontmatter_py), "set", str(decomp),
+                "parent_strat=RHAISTRAT-1",
+                "epic_count=3",
+                "critical_path_length=2",
+            ],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            f"frontmatter.py set failed:\n{result.stderr}"
+        )
+
+    def test_merged_frontmatter_passes_validation(self, tmp_dir):
+        """After the set, the merged frontmatter must validate against the schema."""
+        from artifact_utils import read_frontmatter, update_frontmatter, validate
+
+        decomp = "artifacts/epic-tasks/RHAISTRAT-2-decomposition.md"
+        Path(decomp).parent.mkdir(parents=True, exist_ok=True)
+        Path(decomp).write_text(
+            "---\n"
+            "triage: proceed\n"
+            "triage_verdicts:\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "  - below-threshold\n"
+            "  - proceed\n"
+            "  - proceed\n"
+            "epic_count: 0\n"
+            "---\n"
+        )
+
+        # Real write path — no stubbed IO
+        update_frontmatter(decomp, {
+            "parent_strat": "RHAISTRAT-2",
+            "epic_count": 2,
+            "critical_path_length": 1,
+        }, "decomp-summary")
+
+        data, _ = read_frontmatter(decomp)
+        errors = validate(data, "decomp-summary")
+        assert not errors, f"Validation errors: {errors}"
+        assert data["triage"] == "proceed"
+        assert data["triage_verdicts"] == [
+            "proceed", "proceed", "below-threshold", "proceed", "proceed"
+        ]
+        assert data["epic_count"] == 2
+        assert data["parent_strat"] == "RHAISTRAT-2"
+
+    def test_abstained_triage_also_validates(self, tmp_dir):
+        """triage: abstained must pass decomp-summary validation."""
+        from artifact_utils import read_frontmatter, update_frontmatter, validate
+
+        decomp = "artifacts/epic-tasks/RHAISTRAT-3-decomposition.md"
+        Path(decomp).parent.mkdir(parents=True, exist_ok=True)
+        Path(decomp).write_text(
+            "---\n"
+            "triage: abstained\n"
+            "triage_verdicts:\n"
+            "  - proceed\n"
+            "  - below-threshold\n"
+            "  - proceed\n"
+            "  - docs-only\n"
+            "  - below-threshold\n"
+            "epic_count: 0\n"
+            "---\n"
+        )
+
+        update_frontmatter(decomp, {
+            "parent_strat": "RHAISTRAT-3",
+            "epic_count": 0,
+            "critical_path_length": 0,
+        }, "decomp-summary")
+
+        data, _ = read_frontmatter(decomp)
+        errors = validate(data, "decomp-summary")
+        assert not errors, f"Validation errors: {errors}"
+        assert data["triage"] == "abstained"
 
 
 # ── Phase list sanity ──────────────────────────────────────────────────────────

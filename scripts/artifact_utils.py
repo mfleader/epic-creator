@@ -153,6 +153,14 @@ SCHEMAS = {
             "required": False,
             "default": None,
         },
+        # Open-schema dict: keys are signal field names, values are
+        # {tier: high|medium|unresolved, runs: int}.  No nested schema
+        # is specified so the validator accepts any dict content.
+        "signal_consistency": {
+            "type": "dict",
+            "required": False,
+            "default": None,
+        },
         "jira_key": {
             "type": "string",
             "required": False,
@@ -210,11 +218,16 @@ SCHEMAS = {
         "triage": {
             "type": "string",
             "required": False,
-            "enum": ["below-threshold", "docs-only"],
+            "enum": ["below-threshold", "docs-only", "abstained", "proceed"],
             "default": None,
         },
         "triage_rationale": {
             "type": "string",
+            "required": False,
+            "default": None,
+        },
+        "triage_verdicts": {
+            "type": "list",
             "required": False,
             "default": None,
         },
@@ -307,12 +320,16 @@ def _validate_field(name, value, spec, path=""):
                 f"{full_name}: expected dict, got {type(value).__name__}")
             return errors
         nested_schema = spec.get("fields", {})
-        for key in value:
-            if key not in nested_schema:
-                errors.append(f"{full_name}: unknown field '{key}'")
-        for field_name, field_spec in nested_schema.items():
-            errors.extend(_validate_field(
-                field_name, value.get(field_name), field_spec, full_name))
+        # Only validate sub-fields when an explicit nested schema is provided.
+        # Fields declared as type="dict" with no "fields" key accept any dict
+        # content (open-schema dicts, e.g. signal_consistency).
+        if nested_schema:
+            for key in value:
+                if key not in nested_schema:
+                    errors.append(f"{full_name}: unknown field '{key}'")
+            for field_name, field_spec in nested_schema.items():
+                errors.extend(_validate_field(
+                    field_name, value.get(field_name), field_spec, full_name))
 
     return errors
 
