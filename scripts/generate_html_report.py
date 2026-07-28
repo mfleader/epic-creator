@@ -254,11 +254,11 @@ def render_strategy_section(strat_id):
         "issues": issues,
     }
 
-    # Emit C1 human-review entries for strategies that failed review.
-    # Future issues append other kinds (abstained, unresolved-signal,
-    # strategy-gap) by extending this list; render_human_review_section
-    # requires no changes when new kinds are added.
+    # Emit C1 human-review entries.  All producers append to the same list;
+    # render_human_review_section requires no changes when new kinds are added.
     human_review_entries = []
+
+    # Failed-review producer (gated on review failure)
     if stats["failed"]:
         for iss in issues:
             human_review_entries.append({
@@ -268,6 +268,47 @@ def render_strategy_section(strat_id):
                 "criterion": iss.get("criterion", ""),
                 "description": f"[{score}/14] {iss.get('description', '')}",
             })
+
+    # Abstained producer (Issue 13) — outside failed gate
+    if decomp_fm.get("triage") == "abstained":
+        human_review_entries.append({
+            "strategy_id": strat_id,
+            "kind": "abstained",
+            "severity": "",
+            "criterion": "",
+            "description": "Triage verdict: abstained (strategy excluded from decompose wave)",
+        })
+
+    # Strategy-gap producer (Issue 13) — outside failed gate; iterates all reviews
+    for iss in issues:
+        if iss.get("strategy_gap") is True:
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "strategy-gap",
+                "severity": iss.get("severity", ""),
+                "criterion": iss.get("criterion", ""),
+                "description": iss.get("description", ""),
+            })
+
+    # Unresolved-signal producer (Issue 13) — outside failed gate; one entry per epic
+    for ef_fm, _ in epics:
+        sc = ef_fm.get("signal_consistency")
+        if not sc or not isinstance(sc, dict):
+            continue
+        has_unresolved = any(
+            isinstance(v, dict) and v.get("tier") == "unresolved"
+            for v in sc.values()
+        )
+        if has_unresolved:
+            epic_id = ef_fm.get("epic_id", "unknown")
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "unresolved-signal",
+                "severity": "",
+                "criterion": "",
+                "description": f"Epic {epic_id} has unresolved signal consistency",
+            })
+
     stats["human_review_entries"] = human_review_entries
 
     triage_label = ""

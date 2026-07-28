@@ -2,6 +2,7 @@
 """Generate run report for a decomposition pipeline run."""
 
 import argparse
+import glob
 import os
 import sys
 from datetime import datetime, timezone
@@ -36,6 +37,10 @@ def main():
     criterion_violations = {}   # criterion -> total issue count across batch
     criterion_affected = {}     # criterion -> count of strategies with this criterion violated
     review_count = 0
+    abstained_count = 0
+    sc_high = 0
+    sc_medium = 0
+    sc_unresolved = 0
 
     for strat_id in ids:
         entry = {"strat_id": strat_id, "status": "missing"}
@@ -46,6 +51,8 @@ def main():
             data, _ = read_frontmatter(decomp)
             entry["epic_count"] = data.get("epic_count", 0)
             entry["status"] = "decomposed"
+            if data.get("triage") == "abstained":
+                abstained_count += 1
 
         if os.path.exists(review):
             review_count += 1
@@ -70,6 +77,27 @@ def main():
             for crit in seen_criteria:
                 criterion_affected[crit] = criterion_affected.get(crit, 0) + 1
 
+        # Per-epic signal_consistency tier scan (Issue 13)
+        epic_files = (
+            glob.glob(f"artifacts/epic-tasks/{strat_id}-E*.md")
+            + glob.glob(f"artifacts/epic-tasks/{strat_id}-BRANCH-*-E*.md")
+        )
+        for ef in epic_files:
+            ef_fm, _ = read_frontmatter(ef)
+            sc = ef_fm.get("signal_consistency")
+            if not sc or not isinstance(sc, dict):
+                continue
+            tiers = [
+                v.get("tier") if isinstance(v, dict) else None
+                for v in sc.values()
+            ]
+            if "unresolved" in tiers:
+                sc_unresolved += 1
+            elif "medium" in tiers:
+                sc_medium += 1
+            elif "high" in tiers:
+                sc_high += 1
+
         results.append(entry)
 
     # Compute per-criterion pass rate: fraction of reviewed strategies with no
@@ -84,26 +112,30 @@ def main():
             "pass_rate": pass_rate,
         }
 
+    total_strategies = len(ids)
+    abstention_rate = (
+        round(abstained_count / total_strategies, 3)
+        if total_strategies > 0 else 0.0
+    )
+
     report = {
         "started": opts.start_time,
         "completed": end_time,
         "batch_size": opts.batch_size,
-        "total": len(ids),
+        "total": total_strategies,
         "results": results,
         "per_criterion_stats": per_criterion_stats,
-        # C2 placeholder keys — populated by Issue 5 (triage) and Issue 6
-        # (signal_consistency).  Rendered as the string "not collected" (not
-        # null, not absent) so downstream code that keys into these fields
-        # does not raise KeyError.
+        # C2 keys — Issue 13 populates triage from decomposition-summary
+        # frontmatter and signal_consistency from per-epic frontmatter.
         "triage": {
-            "abstention_rate": "not collected",
-            "abstained_count": "not collected",
+            "abstention_rate": abstention_rate,
+            "abstained_count": abstained_count,
         },
         "signal_consistency": {
             "tier_distribution": {
-                "high": "not collected",
-                "medium": "not collected",
-                "unresolved": "not collected",
+                "high": sc_high,
+                "medium": sc_medium,
+                "unresolved": sc_unresolved,
             }
         },
     }
