@@ -359,11 +359,14 @@ def advance(state, dry_run=False, read_frontmatter=None):
             return "BATCH_DONE", "RE_REVIEW_CHECK → BATCH_DONE: revision made no changes"
         if not dry_run:
             _write_ids("tmp/pipeline-revise-ids.txt", revised_ids)
-            # Delete old review files so the poller can detect fresh reviews
+            # Rename prior review to .prev.md so the poller detects a fresh
+            # review (original path absent) and the re-reviewer can reconcile
+            # prior findings from the renamed file.
             for strat_id in revised_ids:
                 review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
+                prev_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md"
                 if os.path.exists(review_path):
-                    os.remove(review_path)
+                    os.rename(review_path, prev_path)
         return ("RE_REVIEW",
                 f"RE_REVIEW_CHECK → RE_REVIEW: {len(revised_ids)} revised")
 

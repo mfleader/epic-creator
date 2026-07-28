@@ -502,6 +502,96 @@ class TestReReviewCheck:
         assert nxt == "BATCH_DONE"
 
 
+# ── RE_REVIEW_CHECK rename behavior ───────────────────────────────────────────
+
+
+class TestReReviewCheckRename:
+    """Tests for the .prev.md rename at the RE_REVIEW_CHECK transition."""
+
+    def test_prior_review_renamed_to_prev_md(self, tmp_dir):
+        """At RE_REVIEW_CHECK, the prior review is renamed to .prev.md,
+        not deleted, so the re-reviewer can reconcile prior findings."""
+        strat_id = "RHAISTRAT-1"
+        _write_ids("tmp/pipeline-active-ids.txt", [strat_id])
+
+        decomp = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
+        review = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
+        prev = f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md"
+        _touch(decomp)
+        _touch(review)
+
+        rfm = _make_rfm({decomp: ({"revised": True}, "")})
+        state = {"phase": "RE_REVIEW_CHECK", "revise_cycle": 0}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+
+        assert not Path(review).exists(), (
+            "Original review must be gone after rename")
+        assert Path(prev).exists(), (
+            "Prior review must exist at .prev.md path")
+
+    def test_prior_review_not_renamed_when_dry_run(self, tmp_dir):
+        """dry_run=True must not touch the filesystem."""
+        strat_id = "RHAISTRAT-1"
+        _write_ids("tmp/pipeline-active-ids.txt", [strat_id])
+
+        decomp = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
+        review = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
+        prev = f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md"
+        _touch(decomp)
+        _touch(review)
+
+        rfm = _make_rfm({decomp: ({"revised": True}, "")})
+        state = {"phase": "RE_REVIEW_CHECK", "revise_cycle": 0}
+        advance(state, dry_run=True, read_frontmatter=rfm)
+
+        assert Path(review).exists(), "dry_run must not rename the review file"
+        assert not Path(prev).exists(), (
+            "dry_run must not create the .prev.md file")
+
+    def test_prev_md_absent_when_review_file_did_not_exist(self, tmp_dir):
+        """If no review file existed at transition time, no .prev.md is created."""
+        strat_id = "RHAISTRAT-1"
+        _write_ids("tmp/pipeline-active-ids.txt", [strat_id])
+
+        decomp = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
+        prev = f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md"
+        _touch(decomp)
+        # No review file created
+
+        rfm = _make_rfm({decomp: ({"revised": True}, "")})
+        state = {"phase": "RE_REVIEW_CHECK", "revise_cycle": 0}
+        advance(state, dry_run=False, read_frontmatter=rfm)
+
+        assert not Path(prev).exists(), (
+            ".prev.md must not be created when no prior review existed")
+
+    def test_re_review_poller_waits_for_fresh_review_not_prev(self, tmp_dir):
+        """The review_decomp poller returns pending when only .prev.md exists.
+        This confirms the RE_REVIEW agent must write a fresh review at the
+        original path before the pipeline advances."""
+        from check_decompose_progress import check_id
+
+        strat_id = "RHAISTRAT-1"
+        prev = Path(f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md")
+        prev.parent.mkdir(parents=True, exist_ok=True)
+        prev.write_text("---\nscore: 10\npass: true\n---\n")
+
+        # Original path absent → poller must say pending
+        assert check_id("review_decomp", strat_id) == "pending"
+
+    def test_re_review_poller_completes_when_fresh_review_written(self, tmp_dir):
+        """Once the re-reviewer writes a fresh review at the original path,
+        the review_decomp poller reports completed."""
+        from check_decompose_progress import check_id
+
+        strat_id = "RHAISTRAT-1"
+        review = Path(f"artifacts/epic-reviews/{strat_id}-decomp-review.md")
+        review.parent.mkdir(parents=True, exist_ok=True)
+        review.write_text("---\nscore: 11\npass: true\n---\n")
+
+        assert check_id("review_decomp", strat_id) == "completed"
+
+
 # ── RE_REVIEW ──────────────────────────────────────────────────────────────────
 
 
