@@ -13,16 +13,17 @@ import time
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
-from artifact_utils import read_frontmatter
+from artifact_utils import read_frontmatter, epic_files as _epic_files
 
 
 PHASE_CHECKS = {
     "fetch": lambda id: f"artifacts/strat-tasks/{id}.md",
+    "triage": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "decompose": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
+    "score_signals": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "review_decomp": lambda id: f"artifacts/epic-reviews/{id}-decomp-review.md",
     "revise_decomp": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
 }
-
 
 
 def _decompose_complete(strat_id, data):
@@ -37,11 +38,50 @@ def _decompose_complete(strat_id, data):
     return bool(data.get("decompose_complete"))
 
 
+def _count_epic_files(strat_id):
+    """Count true epic files for a strategy (excludes rationale files)."""
+    return len(_epic_files(strat_id))
+
+
 def check_id(phase, strat_id):
     """Check one ID. Returns 'completed', 'pending', or 'error'."""
     path = PHASE_CHECKS[phase](strat_id)
     if not os.path.exists(path):
         return "pending"
+    if phase == "triage":
+        try:
+            data, _ = read_frontmatter(path)
+        except Exception:
+            return "pending"
+        if not data:
+            return "pending"
+        if data.get("triage") is None:
+            return "pending"
+        return "completed"
+    if phase == "score_signals":
+        # Completed when ALL epic files for the strategy have signal_consistency
+        # in their frontmatter.  path is the decomposition summary (already
+        # confirmed to exist by the os.path.exists check above).
+        try:
+            data, _ = read_frontmatter(path)
+        except Exception:
+            return "pending"
+        if not data:
+            return "pending"
+        epic_count = data.get("epic_count") or 0
+        if not epic_count:
+            return "pending"
+        epic_file_list = _epic_files(strat_id)
+        if len(epic_file_list) < epic_count:
+            return "pending"
+        for ef in epic_file_list:
+            try:
+                d, _ = read_frontmatter(ef)
+                if not d or d.get("signal_consistency") is None:
+                    return "pending"
+            except Exception:
+                return "pending"
+        return "completed"
     if phase == "decompose":
         try:
             data, _ = read_frontmatter(path)

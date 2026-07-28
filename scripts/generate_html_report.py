@@ -99,6 +99,16 @@ def severity_badge(sev):
     return f'<span class="badge {cls}">{_html_escape(sev)}</span>'
 
 
+def kind_badge(kind):
+    cls = {
+        "failed-review": "badge-kind-failed-review",
+        "abstained": "badge-kind-abstained",
+        "unresolved-signal": "badge-kind-unresolved-signal",
+        "strategy-gap": "badge-kind-strategy-gap",
+    }.get(kind, "badge-kind-unknown")
+    return f'<span class="badge {cls}">{_html_escape(kind)}</span>'
+
+
 def render_signals(signals, names=SIGNAL_NAMES):
     html = '<div class="signals-grid">'
     for name in names:
@@ -244,6 +254,63 @@ def render_strategy_section(strat_id):
         "issues": issues,
     }
 
+    # Emit C1 human-review entries.  All producers append to the same list;
+    # render_human_review_section requires no changes when new kinds are added.
+    human_review_entries = []
+
+    # Failed-review producer (gated on review failure)
+    if stats["failed"]:
+        for iss in issues:
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "failed-review",
+                "severity": iss.get("severity", ""),
+                "criterion": iss.get("criterion", ""),
+                "description": f"[{score}/14] {iss.get('description', '')}",
+            })
+
+    # Abstained producer (Issue 13) — outside failed gate
+    if decomp_fm.get("triage") == "abstained":
+        human_review_entries.append({
+            "strategy_id": strat_id,
+            "kind": "abstained",
+            "severity": "",
+            "criterion": "",
+            "description": "Triage verdict: abstained (strategy excluded from decompose wave)",
+        })
+
+    # Strategy-gap producer (Issue 13) — outside failed gate; iterates all reviews
+    for iss in issues:
+        if iss.get("strategy_gap") is True:
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "strategy-gap",
+                "severity": iss.get("severity", ""),
+                "criterion": iss.get("criterion", ""),
+                "description": iss.get("description", ""),
+            })
+
+    # Unresolved-signal producer (Issue 13) — outside failed gate; one entry per epic
+    for ef_fm, _ in epics:
+        sc = ef_fm.get("signal_consistency")
+        if not sc or not isinstance(sc, dict):
+            continue
+        has_unresolved = any(
+            isinstance(v, dict) and v.get("tier") == "unresolved"
+            for v in sc.values()
+        )
+        if has_unresolved:
+            epic_id = ef_fm.get("epic_id", "unknown")
+            human_review_entries.append({
+                "strategy_id": strat_id,
+                "kind": "unresolved-signal",
+                "severity": "",
+                "criterion": "",
+                "description": f"Epic {epic_id} has unresolved signal consistency",
+            })
+
+    stats["human_review_entries"] = human_review_entries
+
     triage_label = ""
     if triage:
         triage_label = f' <span class="badge badge-triage">{_html_escape(triage)}</span>'
@@ -372,6 +439,11 @@ CSS = '''
   .badge-minor { background: #fff3cd; color: #856404; }
   .badge-major { background: #f8d7da; color: #842029; }
   .badge-critical { background: #842029; color: white; }
+  .badge-kind-failed-review { background: #842029; color: white; }
+  .badge-kind-abstained { background: #664d03; color: white; }
+  .badge-kind-unresolved-signal { background: #fd7e14; color: white; }
+  .badge-kind-strategy-gap { background: #6c757d; color: white; }
+  .badge-kind-unknown { background: #adb5bd; color: #212529; }
   .epic-header { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
   .epic-id { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 0.85rem; color: var(--accent); font-weight: 600; }
   .epic-title { font-size: 1.1rem; font-weight: 600; }
@@ -432,6 +504,48 @@ CSS = '''
 '''
 
 
+def render_human_review_section(entries):
+    """Render the C1 Requires Human Review section.
+
+    Generic renderer over a collected entry list.  Each entry must conform
+    to the C1 schema: {strategy_id, kind, severity, criterion, description}.
+    The renderer iterates uniformly over all entries regardless of kind, so
+    adding a new kind (abstained, unresolved-signal, strategy-gap, ...) in
+    a future issue requires zero changes here.
+    """
+    if not entries:
+        return ""
+    rows = ""
+    for entry in entries:
+        sid = _html_escape(entry.get("strategy_id", ""))
+        rows += (
+            f'<tr>'
+            f'<td><a href="#{sid}" class="strat-link">{sid}</a></td>'
+            f'<td>{kind_badge(entry.get("kind", ""))}</td>'
+            f'<td>{severity_badge(entry.get("severity", ""))}</td>'
+            f'<td style="font-size:0.85rem;">'
+            f'{_html_escape(entry.get("criterion", ""))}</td>'
+            f'<td style="font-size:0.85rem;">'
+            f'{_html_escape(entry.get("description", ""))}</td>'
+            f'</tr>'
+        )
+    return (
+        f'<h2>Requires Human Review</h2>'
+        f'<div class="card" style="margin-bottom:2rem;">'
+        f'<table class="summary-table">'
+        f'<thead><tr>'
+        f'<th>Strategy</th>'
+        f'<th>Kind</th>'
+        f'<th>Severity</th>'
+        f'<th>Criterion</th>'
+        f'<th>Description</th>'
+        f'</tr></thead>'
+        f'<tbody>{rows}</tbody>'
+        f'</table>'
+        f'</div>'
+    )
+
+
 def build_report(strat_ids, start_time):
     """Build the full HTML report. Returns (html_string, out_filename)."""
     all_sections = []
@@ -457,6 +571,65 @@ def build_report(strat_ids, start_time):
     all_issues = []
     for s in all_stats:
         all_issues.extend(s.get("issues") or [])
+
+    # Aggregate C1 human-review entries from all strategies
+    all_human_review_entries = []
+    for s in all_stats:
+        all_human_review_entries.extend(s.get("human_review_entries") or [])
+    human_review_html = render_human_review_section(all_human_review_entries)
+
+    # Per-criterion violation stats — human-readable rendering (C5).
+    # A strategy is counted as reviewed when its review produced a pass, fail,
+    # or error result; strategies with no review file have all three False.
+    reviewed_count = sum(
+        1 for s in all_stats if s["passed"] or s["failed"] or s["error"]
+    )
+    criterion_violations_map = {}
+    criterion_affected_map = {}
+    for s in all_stats:
+        seen_criteria: set = set()
+        for iss in (s.get("issues") or []):
+            crit = iss.get("criterion", "") if isinstance(iss, dict) else ""
+            if crit:
+                criterion_violations_map[crit] = (
+                    criterion_violations_map.get(crit, 0) + 1
+                )
+                seen_criteria.add(crit)
+        for crit in seen_criteria:
+            criterion_affected_map[crit] = criterion_affected_map.get(crit, 0) + 1
+
+    if criterion_violations_map:
+        crit_rows = ""
+        for crit in sorted(criterion_violations_map):
+            total_v = criterion_violations_map[crit]
+            affected = criterion_affected_map.get(crit, 0)
+            pr = (1.0 - affected / reviewed_count) if reviewed_count > 0 else 0.0
+            pct = f"{pr * 100:.0f}%"
+            bar_color = ("var(--high)" if pr >= 0.7
+                         else ("var(--medium)" if pr >= 0.4 else "var(--low)"))
+            crit_rows += (
+                f'<tr>'
+                f'<td style="font-family:monospace;font-size:0.85rem;">'
+                f'{_html_escape(crit)}</td>'
+                f'<td style="text-align:center;">{total_v}</td>'
+                f'<td style="text-align:center;color:{bar_color};font-weight:600;">'
+                f'{pct}</td>'
+                f'</tr>'
+            )
+        criterion_card_html = (
+            f'<div class="card" style="margin-bottom:2rem;">'
+            f'<h3 style="font-size:1rem;margin-bottom:0.75rem;">'
+            f'Per-Criterion Violation Frequency</h3>'
+            f'<table class="summary-table"><thead><tr>'
+            f'<th>Criterion</th>'
+            f'<th style="text-align:center;">Violations</th>'
+            f'<th style="text-align:center;">Pass Rate</th>'
+            f'</tr></thead>'
+            f'<tbody>{crit_rows}</tbody>'
+            f'</table></div>'
+        )
+    else:
+        criterion_card_html = ""
     critical_count = sum(1 for i in all_issues if i.get("severity") == "critical")
     major_count = sum(1 for i in all_issues if i.get("severity") == "major")
     minor_count = sum(1 for i in all_issues if i.get("severity") == "minor")
@@ -583,6 +756,8 @@ def build_report(strat_ids, start_time):
   {f'<div class="table-fade"></div><button class="table-see-all" onclick="toggleTable(this)">See all {total_strats} strategies</button>' if total_strats > 20 else ''}
 </div>
 
+{human_review_html}
+{criterion_card_html}
 {"".join(all_sections)}
 
 <div style="text-align:center;color:var(--muted);font-size:0.8rem;padding:2rem 0 1rem;">

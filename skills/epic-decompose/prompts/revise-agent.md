@@ -23,7 +23,9 @@ Epic files: artifacts/epic-tasks/{ID}-E*.md
 
 If the review passed all criteria with no issues to fix, skip to Step 3.
 
-For each issue in the review's `issues` list, apply the appropriate correction:
+**strategy_gap routing**: Before applying any correction, check the `strategy_gap` field on each finding. If `strategy_gap: true`, the gap lies in the source strategy document, not the decomposition. Do not alter the decomposition in response to that finding. Set it aside and continue to the next finding. Track all skipped findings for Step 3.
+
+For each issue in the review's `issues` list where `strategy_gap` is `false` or absent, apply the appropriate correction:
 
 ### HLR Coverage issues
 - **Missing HLR mapping**: Find the unmapped HLR in the strategy. Either add it to an existing epic's "HLR Traceability" section (if it fits that epic's scope) or create a new epic to cover it.
@@ -74,7 +76,8 @@ If corrections were applied:
 1. Update the **Epic List** table to reflect any added, removed, or modified epics
 2. Update the **Dependency DAG** diagram
 3. Update the **HLR Traceability Matrix** if HLR mappings changed
-4. Update frontmatter:
+4. If any findings were skipped because `strategy_gap: true`, append a **Requires Strategy Clarification** section to the decomposition summary body. List each skipped finding's criterion and description so reviewers can address these gaps in the source strategy before re-decomposing. This section is the revision summary for strategy-gap findings.
+5. Update frontmatter:
 
 ```bash
 python3 scripts/frontmatter.py set artifacts/epic-tasks/{ID}-decomposition.md revised=true epic_count=<N> critical_path_length=<N>

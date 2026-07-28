@@ -38,7 +38,7 @@ Conversely, if `triage` is absent (full decomposition), do not penalize the deco
 Evaluate the decomposition against these 7 criteria. For each, note specific issues found with severity:
 
 - **Critical**: Structural defect — circular DAG, invalid DAG edge (references nonexistent epic or contradicts diagram), missing DAG edge where a data/artifact dependency exists, frontmatter dependencies inconsistent with decomposition DAG, P0 HLR unmapped, epic type fundamentally wrong
-- **Major**: Rule violation or factual error — missing rule-mandated AC (rules 24-26), frontmatter field contradicts summary table, wrong team/component assignment, unjustified blocking edge that serializes parallel work, AI implementability score contradicts signals
+- **Major**: Rule violation or factual error — missing rule-mandated AC (rules 23-25), frontmatter field contradicts summary table, wrong team/component assignment, unjustified blocking edge that serializes parallel work, AI implementability score contradicts signals
 - **Minor**: Style or completeness nit — could be more explicit but doesn't cause incorrect execution (e.g., a "should" NFR not explicitly addressed, slightly imprecise component name)
 
 ### Criterion 1: HLR Coverage (0-2 points)
@@ -55,7 +55,7 @@ Check: Read the strategy's HLR list. For each HLR, verify it appears in at least
 - **1**: Minor issues — an unjustified blocking edge that doesn't materially affect execution order, or critical path slightly longer than expected.
 - **0**: Circular dependency detected, invalid edge (references nonexistent epic), missing edge where a data/artifact dependency exists, frontmatter dependencies inconsistent with decomposition DAG diagram, or multiple unjustified blocking edges that would serialize naturally-parallel work.
 
-Check: Trace the dependency graph. Verify each edge against the DAG construction rules (boundary rules 1-3, investigation edges 4-5, implementation type ordering 6-12, implementation edges 13-16, external dependency edges 17-19, generation rules 20-23, AC rules 24-26). Check that parallel-eligible work (different repos, no shared artifacts) is not unnecessarily serialized. Note: Rule 11 edges (all implementations → `docs-authoring`) are valid DAG edges but do not trigger priority inheritance — do not flag them as unjustified serialization or priority inheritance violations. Verify critical path length against strategy size heuristics (S: 1-2, M standard: 3-4, M with new component: 4-5, L: 5-7). **Cross-check consistency**: The DAG diagram convention is `graph TD` with arrows from dependency to dependent (`E001 --> E003` means "E001 must complete before E003 can start"). Verify that every edge in the decomposition summary DAG diagram has a matching `dependencies` entry in the target epic's frontmatter, and vice versa. If arrows are drawn in the opposite direction (dependent → dependency), flag as a critical issue — the diagram is misleading even if frontmatter is correct. Any mismatch (edge in diagram but not in frontmatter, or frontmatter dependency referencing a nonexistent epic) is a critical issue — score 0. **Cross-check completeness**: also scan epic content (scope, ACs, descriptions) for data/artifact dependencies not captured in the DAG — e.g., an epic that consumes a schema, image, or API produced by another epic but has no edge to it. A missing edge discoverable from epic content is a critical issue even if the diagram and frontmatter are consistent with each other.
+Check: Trace the dependency graph. Verify each edge against the DAG construction rules (boundary rules 1-2, investigation edges 3-4, implementation type ordering 5-11, implementation edges 12-15, external dependency edges 16-18, generation rules 19-22, AC rules 23-25). Check that parallel-eligible work (different repos, no shared artifacts) is not unnecessarily serialized. Note: Rule 11 edges (all implementations → `docs-authoring`) are valid DAG edges but do not trigger priority inheritance — do not flag them as unjustified serialization or priority inheritance violations. Verify critical path length against strategy size heuristics (S: 1-2, M standard: 3-4, M with new component: 4-5, L: 5-7). **Cross-check consistency**: The DAG diagram convention is `graph TD` with arrows from dependency to dependent (`E001 --> E003` means "E001 must complete before E003 can start"). Verify that every edge in the decomposition summary DAG diagram has a matching `dependencies` entry in the target epic's frontmatter, and vice versa. If arrows are drawn in the opposite direction (dependent → dependency), flag as a critical issue — the diagram is misleading even if frontmatter is correct. Any mismatch (edge in diagram but not in frontmatter, or frontmatter dependency referencing a nonexistent epic) is a critical issue — score 0. **Cross-check completeness**: also scan epic content (scope, ACs, descriptions) for data/artifact dependencies not captured in the DAG — e.g., an epic that consumes a schema, image, or API produced by another epic but has no edge to it. A missing edge discoverable from epic content is a critical issue even if the diagram and frontmatter are consistent with each other.
 
 ### Criterion 3: Epic Boundaries (0-2 points)
 
@@ -145,14 +145,55 @@ Recommendation: [accept/revise]
 <findings>
 ```
 
-2. Set frontmatter via script. The `issues` list uses JSON format — each issue has `severity` (critical/major/minor), `criterion` (which of the 7), and `description` (specific, actionable):
+2. Set frontmatter via script. The `issues` list uses JSON format — each issue has `severity` (critical/major/minor), `criterion` (which of the 7), `description` (specific, actionable), and `strategy_gap` (boolean, default false).
+
+**strategy_gap**: Set to `true` when resolving the finding requires information absent from the strategy document — for example, the strategy omits a constraint, prerequisite, or scope boundary that would change the decomposition. Set to `false` (or omit) when the decomposition can be improved to address the finding without additional input from the strategy author. A `strategy_gap: true` finding counts toward the review score exactly as any other finding of the same severity. It appears in the run report's human-review section with `kind: strategy-gap` and is skipped by the revise agent.
 
 ```bash
 python3 scripts/frontmatter.py set artifacts/epic-reviews/{ID}-decomp-review.md \
     strat_id="{ID}" score=13 pass=true recommendation=accept \
-    'issues=[{"severity":"minor","criterion":"DAG Coherence","description":"E003-E004 edge not justified by shared artifact"}]'
+    'issues=[{"severity":"minor","criterion":"DAG Coherence","description":"E003-E004 edge not justified by shared artifact","strategy_gap":false}]'
 ```
 
 For a passing review with no issues: `issues=[]`
 
-Do not return a summary. Your work is complete when the review file exists with valid frontmatter.
+## Step 5: Carryover Reconciliation (if prior review exists)
+
+This step fires only after independent scoring (Steps 1–4) is complete. Check for the prior review file now — do not read it before this point.
+
+Check: `artifacts/epic-reviews/{ID}-decomp-review.prev.md`
+
+If the file does not exist, your work is complete.
+
+If the file exists, read it and reconcile each entry in its `issues` list:
+
+- **resolved**: the decomposition was corrected to address this finding
+- **unresolved**: the finding still applies (carry forward the original severity and criterion)
+- **disputed**: you do not agree this is a genuine finding — provide one line of reasoning
+
+### Carryover rules
+
+1. The 7-criterion score (0–14) computed in Steps 2–3 is not changed.
+2. For every prior finding marked `unresolved` with severity `critical` or `major`: add it to the current review's `issues` list and set `pass=false` in the frontmatter. Re-run the frontmatter set command with the full updated `issues` array and the updated `pass` value:
+
+```bash
+python3 scripts/frontmatter.py set artifacts/epic-reviews/{ID}-decomp-review.md \
+    pass=false \
+    'issues=[<full updated issues array including carried-over findings>]'
+```
+
+3. Minor unresolved prior findings are added to `issues` for visibility but do not force `pass=false` on their own.
+
+### Append the carryover section to the review file
+
+```markdown
+## Carryover Reconciliation
+
+| Prior finding | Severity | Verdict | Reasoning |
+|---|---|---|---|
+| [description] | critical/major/minor | resolved | — |
+| [description] | critical/major/minor | unresolved | Carried to current issues list |
+| [description] | critical/major/minor | disputed | [one line of reasoning] |
+```
+
+Do not return a summary. Your work is complete when the review file exists with valid frontmatter and the carryover section (if applicable) has been appended.

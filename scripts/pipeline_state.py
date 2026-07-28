@@ -52,9 +52,11 @@ _BlockDumper.add_representer(str, _str_representer)
 # ---------- Phase enum ----------
 
 PHASES = [
-    "BATCH_START", "FETCH", "DECOMPOSE", "REVIEW_DECOMP",
-    "REVISE_DECOMP",
+    "BATCH_START", "FETCH", "TRIAGE", "DECOMPOSE",
+    "SCORE_SIGNALS_DECOMP", "REVIEW_DECOMP",
+    "REVISE_DECOMP", "SCORE_SIGNALS_REVISE",
     "RE_REVIEW_CHECK", "RE_REVIEW", "REVISE_CHECK", "RE_REVISE",
+    "SCORE_SIGNALS_REREVISE",
     "BATCH_DONE", "ERROR_COLLECT",
     "REPORT", "DONE",
 ]
@@ -70,12 +72,62 @@ PHASE_CONFIG = {
         "poll_phase": "fetch",
         "vars": {"ID": "{ID}"},
     },
+    "TRIAGE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/triage-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "triage",
+        "vars": {"ID": "{ID}"},
+        "k": 5,
+        "threshold": 4,
+        "sample_model": None,
+    },
     "DECOMPOSE": {
         "type": "agent",
         "prompt": "skills/epic-decompose/prompts/decompose-agent.md",
         "ids_file": "tmp/pipeline-active-ids.txt",
         "poll_phase": "decompose",
         "vars": {"ID": "{ID}"},
+    },
+    # SCORE_SIGNALS phases run the signal-scorer after each decompose/revise step.
+    # k, escalation_k, tier_thresholds, sample_model, and citation_demotion are
+    # read from this config and injected as agent vars — see cmd_next_action.
+    # Never hardcode these values in the prompt; the prompt reads {K} etc. as vars.
+    "SCORE_SIGNALS_DECOMP": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
+    },
+    "SCORE_SIGNALS_REVISE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-active-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
+    },
+    "SCORE_SIGNALS_REREVISE": {
+        "type": "agent",
+        "prompt": "skills/epic-decompose/prompts/signal-scorer-agent.md",
+        "ids_file": "tmp/pipeline-revise-ids.txt",
+        "poll_phase": "score_signals",
+        "vars": {"ID": "{ID}"},
+        "k": 3,
+        "escalation_k": 5,
+        "tier_thresholds": {"high": 1.0, "medium": 0.5},
+        "sample_model": None,
+        "citation_demotion": True,
     },
     "REVIEW_DECOMP": {
         "type": "agent",
@@ -160,14 +212,15 @@ def _copy_ids(src, dst):
     shutil.copy2(src, dst)
 
 
-def _reset_revised_flag(decomp_path):
+def _reset_revised_flag(decomp_path, read_frontmatter=None):
     """Remove ``revised`` key from decomposition frontmatter.
 
     The revise_decomp completion poller treats *any* non-None value
     (including False) as "completed".  Removing the key forces it back to
     "pending" so the revise agent is actually launched.
     """
-    from artifact_utils import read_frontmatter
+    if read_frontmatter is None:
+        from artifact_utils import read_frontmatter
     data, body = read_frontmatter(decomp_path)
     if data and "revised" in data:
         del data["revised"]
@@ -203,14 +256,17 @@ def _compute_ai_scores(ids_file):
 
 # ---------- Transition logic ----------
 
-MAIN_SEQUENCE = ["FETCH", "DECOMPOSE", "REVIEW_DECOMP"]
+MAIN_SEQUENCE = ["FETCH", "TRIAGE", "DECOMPOSE", "SCORE_SIGNALS_DECOMP", "REVIEW_DECOMP"]
 
 
-def advance(state, dry_run=False):
+def advance(state, dry_run=False, read_frontmatter=None):
     """Compute and apply the next phase transition.
 
     Returns (next_phase, summary_line).
     """
+    _rfm = read_frontmatter
+    if _rfm is None:
+        from artifact_utils import read_frontmatter as _rfm
     phase = state["phase"]
 
     # --- BATCH_START: reset counters, populate active IDs ---
@@ -223,11 +279,41 @@ def advance(state, dry_run=False):
         return "FETCH", f"BATCH_START → FETCH: batch={batch}"
 
     # --- Linear main sequence ---
+    # FETCH → TRIAGE → DECOMPOSE → SCORE_SIGNALS_DECOMP → REVIEW_DECOMP
+    # _compute_ai_scores fires at SCORE_SIGNALS_DECOMP (not DECOMPOSE).
     if phase in MAIN_SEQUENCE[:-1]:
         nxt = MAIN_SEQUENCE[MAIN_SEQUENCE.index(phase) + 1]
-        if phase == "DECOMPOSE" and not dry_run:
+        extra = ""
+        if phase == "SCORE_SIGNALS_DECOMP" and not dry_run:
             _compute_ai_scores("tmp/pipeline-active-ids.txt")
-        return nxt, f"{phase} → {nxt}"
+        if phase == "TRIAGE" and not dry_run:
+            active_ids = _read_ids("tmp/pipeline-active-ids.txt")
+            triage_cfg = PHASE_CONFIG.get("TRIAGE", {})
+            abstained = []
+            for strat_id in active_ids:
+                stub = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
+                if os.path.exists(stub):
+                    try:
+                        data, _ = _rfm(stub)
+                        if data and data.get("triage") == "abstained":
+                            abstained.append(strat_id)
+                    except Exception:
+                        pass
+            non_abstained = [sid for sid in active_ids
+                             if sid not in abstained]
+            state["triage_abstained_count"] = len(abstained)
+            total = max(len(active_ids), 1)
+            rate = len(abstained) / total
+            state["triage_abstention_rate"] = rate
+            if rate > 0.20:
+                state["triage_distribution_shift_warning"] = True
+            _write_ids("tmp/pipeline-active-ids.txt", non_abstained)
+            extra = (f" abstained={len(abstained)}"
+                     f" non_abstained={len(non_abstained)}"
+                     f" rate={rate:.0%}")
+            if rate > 0.20:
+                extra += " DISTRIBUTION_SHIFT_WARNING"
+        return nxt, f"{phase} → {nxt}{extra}"
 
     # --- REVIEW_DECOMP → REVISE_DECOMP (unconditional first revision) ---
     if phase == "REVIEW_DECOMP":
@@ -238,18 +324,22 @@ def advance(state, dry_run=False):
             for strat_id in _read_ids("tmp/pipeline-active-ids.txt"):
                 decomp = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
                 if os.path.exists(decomp):
-                    _reset_revised_flag(decomp)
+                    _reset_revised_flag(decomp, read_frontmatter=_rfm)
         return "REVISE_DECOMP", "REVIEW_DECOMP → REVISE_DECOMP: first revision (unconditional)"
 
-    # --- REVISE_DECOMP → RE_REVIEW_CHECK ---
+    # --- REVISE_DECOMP → SCORE_SIGNALS_REVISE ---
+    # _compute_ai_scores fires at SCORE_SIGNALS_REVISE (not REVISE_DECOMP).
     if phase == "REVISE_DECOMP":
+        return "SCORE_SIGNALS_REVISE", "REVISE_DECOMP → SCORE_SIGNALS_REVISE"
+
+    # --- SCORE_SIGNALS_REVISE → RE_REVIEW_CHECK ---
+    if phase == "SCORE_SIGNALS_REVISE":
         if not dry_run:
             _compute_ai_scores("tmp/pipeline-active-ids.txt")
-        return "RE_REVIEW_CHECK", "REVISE_DECOMP → RE_REVIEW_CHECK"
+        return "RE_REVIEW_CHECK", "SCORE_SIGNALS_REVISE → RE_REVIEW_CHECK"
 
     # --- RE_REVIEW_CHECK: did revision change anything? ---
     if phase == "RE_REVIEW_CHECK":
-        from artifact_utils import read_frontmatter
         cycle = state.get("revise_cycle", 0)
         if cycle == 0:
             check_ids = _read_ids("tmp/pipeline-active-ids.txt")
@@ -260,7 +350,7 @@ def advance(state, dry_run=False):
             decomp_path = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
             if os.path.exists(decomp_path):
                 try:
-                    data, _ = read_frontmatter(decomp_path)
+                    data, _ = _rfm(decomp_path)
                     if data and data.get("revised"):
                         revised_ids.append(strat_id)
                 except Exception:
@@ -269,11 +359,14 @@ def advance(state, dry_run=False):
             return "BATCH_DONE", "RE_REVIEW_CHECK → BATCH_DONE: revision made no changes"
         if not dry_run:
             _write_ids("tmp/pipeline-revise-ids.txt", revised_ids)
-            # Delete old review files so the poller can detect fresh reviews
+            # Rename prior review to .prev.md so the poller detects a fresh
+            # review (original path absent) and the re-reviewer can reconcile
+            # prior findings from the renamed file.
             for strat_id in revised_ids:
                 review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
+                prev_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.prev.md"
                 if os.path.exists(review_path):
-                    os.remove(review_path)
+                    os.rename(review_path, prev_path)
         return ("RE_REVIEW",
                 f"RE_REVIEW_CHECK → RE_REVIEW: {len(revised_ids)} revised")
 
@@ -283,14 +376,13 @@ def advance(state, dry_run=False):
 
     # --- REVISE_CHECK: only revise again if review fails, with cycle cap ---
     if phase == "REVISE_CHECK":
-        from artifact_utils import read_frontmatter
         revise_ids = _read_ids("tmp/pipeline-revise-ids.txt")
         failing_ids = []
         for strat_id in revise_ids:
             review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
             if os.path.exists(review_path):
                 try:
-                    data, _ = read_frontmatter(review_path)
+                    data, _ = _rfm(review_path)
                     if data and not data.get("pass", True):
                         failing_ids.append(strat_id)
                 except Exception:
@@ -304,17 +396,22 @@ def advance(state, dry_run=False):
                 for strat_id in failing_ids:
                     decomp_path = f"artifacts/epic-tasks/{strat_id}-decomposition.md"
                     if os.path.exists(decomp_path):
-                        _reset_revised_flag(decomp_path)
+                        _reset_revised_flag(decomp_path, read_frontmatter=_rfm)
             return ("RE_REVISE",
                     f"REVISE_CHECK → RE_REVISE:"
                     f" failing={len(failing_ids)} cycle={cycle + 1}/2")
         return "BATCH_DONE", "REVISE_CHECK → BATCH_DONE: review passed or cycle cap reached"
 
-    # --- RE_REVISE → RE_REVIEW_CHECK (loop back) ---
+    # --- RE_REVISE → SCORE_SIGNALS_REREVISE (loop back) ---
+    # _compute_ai_scores fires at SCORE_SIGNALS_REREVISE (not RE_REVISE).
     if phase == "RE_REVISE":
+        return "SCORE_SIGNALS_REREVISE", "RE_REVISE → SCORE_SIGNALS_REREVISE"
+
+    # --- SCORE_SIGNALS_REREVISE → RE_REVIEW_CHECK ---
+    if phase == "SCORE_SIGNALS_REREVISE":
         if not dry_run:
             _compute_ai_scores("tmp/pipeline-revise-ids.txt")
-        return "RE_REVIEW_CHECK", "RE_REVISE → RE_REVIEW_CHECK"
+        return "RE_REVIEW_CHECK", "SCORE_SIGNALS_REREVISE → RE_REVIEW_CHECK"
 
     # --- BATCH_DONE decision ---
     if phase == "BATCH_DONE":
@@ -336,8 +433,7 @@ def advance(state, dry_run=False):
                 review_path = f"artifacts/epic-reviews/{strat_id}-decomp-review.md"
                 if os.path.exists(review_path):
                     try:
-                        from artifact_utils import read_frontmatter
-                        data, _ = read_frontmatter(review_path)
+                        data, _ = _rfm(review_path)
                         if data and data.get("error"):
                             error_ids.append(strat_id)
                     except Exception:
@@ -579,6 +675,26 @@ def cmd_next_action(args):
                 for k, v in config.get("vars", {}).items():
                     var_lines.append(
                         f"{k}={v.replace('{ID}', strat_id)}")
+                # Inject PHASE_CONFIG scalar parameters as agent env vars.
+                # This ensures prompts read config values from vars (not
+                # hardcoded), satisfying the CONFIG MUST BE WIRED requirement.
+                _SCALAR_VARS = {
+                    "k": "K",
+                    "escalation_k": "ESCALATION_K",
+                    "sample_model": "SAMPLE_MODEL",
+                    "citation_demotion": "CITATION_DEMOTION",
+                }
+                for cfg_key, var_name in _SCALAR_VARS.items():
+                    if cfg_key in config:
+                        val = config[cfg_key]
+                        var_lines.append(
+                            f"{var_name}={val if val is not None else 'none'}")
+                if "tier_thresholds" in config:
+                    tt = config["tier_thresholds"]
+                    var_lines.append(
+                        f"TIER_HIGH_FRACTION={tt.get('high', 1.0)}")
+                    var_lines.append(
+                        f"TIER_MEDIUM_FRACTION={tt.get('medium', 0.5)}")
                 entry["vars"] = "\n".join(var_lines) + "\n"
                 agents.append(entry)
 
