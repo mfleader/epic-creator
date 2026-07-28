@@ -21,6 +21,7 @@ PHASE_CHECKS = {
     "fetch": lambda id: f"artifacts/strat-tasks/{id}.md",
     "triage": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "decompose": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
+    "score_signals": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
     "review_decomp": lambda id: f"artifacts/epic-reviews/{id}-decomp-review.md",
     "revise_decomp": lambda id: f"artifacts/epic-tasks/{id}-decomposition.md",
 }
@@ -47,6 +48,34 @@ def check_id(phase, strat_id):
             return "pending"
         if data.get("triage") is None:
             return "pending"
+        return "completed"
+    if phase == "score_signals":
+        # Completed when ALL epic files for the strategy have signal_consistency
+        # in their frontmatter.  path is the decomposition summary (already
+        # confirmed to exist by the os.path.exists check above).
+        try:
+            data, _ = read_frontmatter(path)
+        except Exception:
+            return "pending"
+        if not data:
+            return "pending"
+        epic_count = data.get("epic_count") or 0
+        if not epic_count:
+            return "pending"
+        epic_files = [
+            f for f in glob.glob(
+                f"artifacts/epic-tasks/{strat_id}-*E*.md")
+            if not f.endswith("-decomposition.md")
+        ]
+        if len(epic_files) < epic_count:
+            return "pending"
+        for ef in epic_files:
+            try:
+                d, _ = read_frontmatter(ef)
+                if not d or d.get("signal_consistency") is None:
+                    return "pending"
+            except Exception:
+                return "pending"
         return "completed"
     if phase == "decompose":
         try:
